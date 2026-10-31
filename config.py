@@ -20,24 +20,12 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     BUNDLE_DIR = BASE_DIR
 
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+AUTH_FILE = os.path.join(BASE_DIR, ".auth")
+OLD_CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
 METADATA_DIR = os.path.join(DOWNLOADS_DIR, "metadata")
-DATABASE_FILE = os.path.join(BASE_DIR, "database.json")
 
 os.makedirs(METADATA_DIR, exist_ok=True)
-
-DEFAULT_CONFIG = {
-    "bot_token": "",
-    "admin_id": 0,
-    "buzzheavier_account_id": "",
-    "gofile_api_token": "",
-    "aria2_port": 6800,
-    "aria2_rpc_secret": "",
-    "aria2_path": "",
-    "progress_update_interval": 2.5,
-    "files_per_page": 8
-}
 
 # Terminal styling helpers (Anya Bot Theme)
 CYAN = "\033[96m"
@@ -50,24 +38,41 @@ BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
-# Enable VT100 colors on Windows cmd
 if os.name == "nt":
     os.system("color")
 
-def load_or_prompt_config() -> dict:
-    """Load configuration from config.json or prompt in console on first run."""
-    config = dict(DEFAULT_CONFIG)
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                config.update(loaded)
-        except Exception as e:
-            print(f"{YELLOW}[!] Warning reading config.json: {e}{RESET}")
+def load_or_prompt_auth() -> dict:
+    """Load credentials from .auth or prompt in console on first run."""
+    auth = {}
 
-    # Check if we need interactive setup
-    token = config.get("bot_token", "").strip()
-    admin_id = config.get("admin_id", 0)
+    # Migrate from old config.json if present, then delete config.json
+    if os.path.exists(OLD_CONFIG_FILE):
+        try:
+            with open(OLD_CONFIG_FILE, "r", encoding="utf-8") as f:
+                old = json.load(f)
+                if old.get("bot_token"):
+                    auth["bot_token"] = old["bot_token"].strip()
+                if old.get("admin_id"):
+                    auth["admin_id"] = int(old["admin_id"])
+        except Exception:
+            pass
+        try:
+            os.remove(OLD_CONFIG_FILE)
+            print(f"{GREEN}[✓] Removed legacy config.json (settings moved to cloud DB){RESET}")
+        except Exception:
+            pass
+
+    # Read .auth file if exists
+    if os.path.exists(AUTH_FILE):
+        try:
+            with open(AUTH_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                auth.update(loaded)
+        except Exception:
+            pass
+
+    token = auth.get("bot_token", "").strip()
+    admin_id = auth.get("admin_id", 0)
 
     if not token or token == "YOUR_BOT_TOKEN_HERE" or not admin_id:
         if os.name == "nt":
@@ -75,7 +80,7 @@ def load_or_prompt_config() -> dict:
         print("\n" + CYAN + "=" * 65 + RESET)
         print(f"{BOLD}{WHITE}         ⚡ TORRENT STREAM BOT - INITIAL SETUP ⚡{RESET}")
         print(CYAN + "=" * 65 + RESET)
-        print(f"{YELLOW}[!] No saved configuration found. Please enter bot credentials:{RESET}\n")
+        print(f"{YELLOW}[!] No saved credentials found. Please enter bot credentials:{RESET}\n")
 
         while not token or token == "YOUR_BOT_TOKEN_HERE":
             try:
@@ -99,38 +104,30 @@ def load_or_prompt_config() -> dict:
                 input("\nPress Enter to exit...")
                 sys.exit(1)
 
-        config["bot_token"] = token
-        config["admin_id"] = admin_id
+        auth["bot_token"] = token
+        auth["admin_id"] = admin_id
 
-        # Save to config.json
         try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=4)
-            print(f"\n  {GREEN}✓{RESET} {WHITE}Configuration saved successfully to:{RESET} {CYAN}{CONFIG_FILE}{RESET}\n")
+            with open(AUTH_FILE, "w", encoding="utf-8") as f:
+                json.dump(auth, f, indent=2)
+            print(f"\n  {GREEN}✓{RESET} {WHITE}Credentials saved successfully.{RESET}\n")
         except Exception as e:
-            print(f"  {RED}✗ Failed to write config.json: {e}{RESET}")
+            print(f"  {RED}✗ Failed to write credentials: {e}{RESET}")
 
-    return config
+    return auth
 
-# Load config once
-CURRENT_CONFIG = load_or_prompt_config()
+AUTH_DATA = load_or_prompt_auth()
+BOT_TOKEN = AUTH_DATA.get("bot_token", "")
+ADMIN_ID = AUTH_DATA.get("admin_id", 0)
 
-BOT_TOKEN = CURRENT_CONFIG.get("bot_token", "")
-ADMIN_ID = CURRENT_CONFIG.get("admin_id", 0)
-BUZZHEAVIER_ACCOUNT_ID = CURRENT_CONFIG.get("buzzheavier_account_id", "")
-GOFILE_API_TOKEN = CURRENT_CONFIG.get("gofile_api_token", "")
-ARIA2_PORT = int(CURRENT_CONFIG.get("aria2_port", 6800))
-ARIA2_RPC_SECRET = CURRENT_CONFIG.get("aria2_rpc_secret", "")
+ARIA2_PORT = 6800
+ARIA2_RPC_SECRET = ""
 ARIA2_RPC_URL = f"http://localhost:{ARIA2_PORT}/jsonrpc"
-PROGRESS_UPDATE_INTERVAL = float(CURRENT_CONFIG.get("progress_update_interval", 2.5))
-FILES_PER_PAGE = int(CURRENT_CONFIG.get("files_per_page", 8))
+PROGRESS_UPDATE_INTERVAL = 2.5
+FILES_PER_PAGE = 8
 
 def find_aria2_executable() -> str:
     """Locate the aria2c executable across common installation paths."""
-    custom_path = CURRENT_CONFIG.get("aria2_path")
-    if custom_path and os.path.exists(custom_path):
-        return custom_path
-
     # Check system PATH
     which_path = shutil.which("aria2c") or shutil.which("aria2c.exe")
     if which_path:
@@ -153,15 +150,3 @@ def find_aria2_executable() -> str:
     return "aria2c"
 
 ARIA2_PATH = find_aria2_executable()
-
-def update_config_value(key: str, value) -> bool:
-    """Update a setting and persist to config.json."""
-    global CURRENT_CONFIG
-    CURRENT_CONFIG[key] = value
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(CURRENT_CONFIG, f, indent=4)
-        return True
-    except Exception as e:
-        print(f"[!] Error updating config.json: {e}")
-        return False

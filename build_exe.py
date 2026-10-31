@@ -58,6 +58,8 @@ def build():
         "--hidden-import",
         "requests",
         "--hidden-import",
+        "github_client",
+        "--hidden-import",
         "torrentool",
         "bot.py",
     ]

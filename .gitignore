@@ -20,6 +20,8 @@ yarn-error.log*
 # Runtime data & secrets (Tokens & Databases)
 config.json
 database.json
+.auth
+.db_cache.json
 .env
 .env.*
 

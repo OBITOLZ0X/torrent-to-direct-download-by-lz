@@ -7,7 +7,8 @@ import glob
 import zipfile
 import subprocess
 import threading
-from config import BASE_DIR, BUNDLE_DIR, BUZZHEAVIER_ACCOUNT_ID, GOFILE_API_TOKEN
+from config import BASE_DIR, BUNDLE_DIR
+from database import db
 
 def find_node_executable() -> str:
     """Find the node.exe executable across standard locations."""
@@ -95,10 +96,12 @@ class StreamManager:
             destination.lower(),
         ]
 
-        if destination.lower() == "buzzheavier" and BUZZHEAVIER_ACCOUNT_ID:
-            cmd.extend(["--account-id", BUZZHEAVIER_ACCOUNT_ID])
-        elif destination.lower() == "gofile" and GOFILE_API_TOKEN:
-            cmd.extend(["--gofile-token", GOFILE_API_TOKEN])
+        buzz_acc = db.get_setting("buzzheavier_account_id", "")
+        gofile_tok = db.get_setting("gofile_api_token", "")
+        if destination.lower() == "buzzheavier" and buzz_acc:
+            cmd.extend(["--account-id", buzz_acc])
+        elif destination.lower() == "gofile" and gofile_tok:
+            cmd.extend(["--gofile-token", gofile_tok])
 
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
