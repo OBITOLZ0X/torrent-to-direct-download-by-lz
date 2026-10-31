@@ -1,0 +1,4 @@
+pyTelegramBotAPI>=4.24.0
+requests>=2.31.0
+torrentool>=1.2.0
+pyinstaller>=6.19.0

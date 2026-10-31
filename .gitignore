@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Build outputs & executables
+build/
+dist/
+*.exe
+!aria2c.exe
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data & secrets (Tokens & Databases)
+config.json
+database.json
+.env
+.env.*
+
+# Downloads & torrent temporary files
+downloads/
+*.aria2
+*.torrent
+
+# IDEs & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
