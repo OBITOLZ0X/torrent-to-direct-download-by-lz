@@ -1,9 +1,20 @@
 import os
+import sys
 import re
 import time
 import uuid
 import html
 import threading
+
+# Ensure UTF-8 output on Windows consoles
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import telebot
 from telebot import types
 from telebot.apihelper import ApiTelegramException
@@ -14,6 +25,16 @@ from config import (
     METADATA_DIR,
     PROGRESS_UPDATE_INTERVAL,
     FILES_PER_PAGE,
+    ARIA2_PORT,
+    CYAN,
+    GREEN,
+    YELLOW,
+    RED,
+    MAGENTA,
+    WHITE,
+    BOLD,
+    DIM,
+    RESET,
 )
 from utils import (
     human_readable_size,
@@ -25,10 +46,23 @@ from torrent_manager import Aria2Manager
 from stream_manager import StreamManager
 from database import db
 
-# Initialize Telegram bot and managers
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
-aria2 = Aria2Manager()
-stream_mgr = StreamManager()
+# Initialize Telegram bot and managers with crash protection
+try:
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+    aria2 = Aria2Manager()
+    stream_mgr = StreamManager()
+except Exception as init_err:
+    print(f"\n{RED}[!] CRITICAL INITIALIZATION ERROR: {init_err}{RESET}")
+    import traceback
+    traceback.print_exc()
+    print(f"\n{YELLOW}[!] The console window will remain OPEN so you can see this error.{RESET}")
+    while True:
+        try:
+            input("\nPress Enter to exit...")
+            break
+        except Exception:
+            time.sleep(5)
+    sys.exit(1)
 
 # In-memory storage for active sessions
 sessions: dict[str, dict] = {}
@@ -903,20 +937,81 @@ def handle_admin_text_inputs(message: types.Message):
                 pass
         bot.send_message(message.chat.id, f"✅ Broadcast complete! Delivered to <b>{sent_count}/{len(all_users)}</b> users.")
 
-# ================= Entry Point =================
+# ================= Entry Point (Anya Bot Theme & Crash Protection) =================
+
+def print_anya_banner(bot_info):
+    """Render a clean, colorful console status dashboard inspired by Anya Bot."""
+    width = 68
+    bot_name = bot_info.first_name if bot_info else "Torrent Stream Bot"
+    bot_username = f"@{bot_info.username}" if (bot_info and bot_info.username) else "N/A"
+    bot_id = str(bot_info.id) if bot_info else "N/A"
+    mode = db.get_setting("bot_mode", "public").upper()
+    users_count = len(db.get_all_user_ids())
+
+    print()
+    print(f"{CYAN}{'=' * width}{RESET}")
+    print(f"{BOLD}{WHITE}             [+]  T O R R E N T   S T R E A M   B O T  [+]{RESET}")
+    print(f"{MAGENTA}                   Pure RAM Streaming Engine v2.0{RESET}")
+    print(f"{DIM}{WHITE}                      Buzzheavier & Gofile.io{RESET}")
+    print(f"{CYAN}{'=' * width}{RESET}")
+    print(f"\n{CYAN}{'-' * width}{RESET}")
+    print(f"  {BOLD}{WHITE}SYSTEM & BOT STATUS{RESET}")
+    print(f"{CYAN}{'-' * width}{RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Bot Name:{RESET}       {GREEN}{bot_name}{RESET} ({CYAN}{bot_username}{RESET})")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Bot ID:{RESET}         {YELLOW}{bot_id}{RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Admin ID:{RESET}       {YELLOW}{ADMIN_ID}{RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Bot Mode:{RESET}       {MAGENTA}{mode}{RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}RAM Streamer:{RESET}   {WHITE}Node.js WebTorrent (In-RAM Buffer){RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Metadata:{RESET}       {WHITE}Aria2c RPC Daemon (Port {ARIA2_PORT}){RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Cloud Hosts:{RESET}    {CYAN}Buzzheavier.com{RESET} & {CYAN}Gofile.io{RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Disk Footprint:{RESET} {GREEN}0 BYTES (Pure RAM Relay){RESET}")
+    print(f"  {CYAN}[•]{RESET} {WHITE}Registered:{RESET}     {WHITE}{users_count} Users (database.json){RESET}")
+    print(f"{CYAN}{'-' * width}{RESET}")
+    print(f"  {GREEN}[✓]{RESET} {BOLD}{GREEN}Bot is ONLINE and listening for incoming messages...{RESET}")
+    print(f"  {DIM}(Press Ctrl+C to stop){RESET}")
+    print(f"{CYAN}{'-' * width}{RESET}\n")
 
 if __name__ == "__main__":
-    print("==========================================")
-    print("  Telegram Torrent-to-Stream Bot v2.0    ")
-    print("      ⚡ STREAM MODE (Buzz & Gofile) ⚡   ")
-    print("==========================================")
-    print(f"[*] Admin ID: {ADMIN_ID}")
-    print(f"[*] Node Streamer: {stream_mgr.streamer_script}")
-    print("[*] Starting Telegram Bot polling...")
+    if os.name == "nt":
+        os.system("title Torrent Stream Bot v2.0 - [ONLINE]")
 
     try:
-        bot.infinity_polling(skip_pending=True)
-    except (KeyboardInterrupt, SystemExit):
-        print("\n[*] Bot stopped by user.")
-    except Exception as e:
-        print(f"\n[!] Polling crashed with error: {e}")
+        # Fetch bot credentials from Telegram
+        bot_info = None
+        try:
+            bot_info = bot.get_me()
+        except Exception as e:
+            print(f"{YELLOW}[!] Notice: Could not query get_me() immediately: {e}{RESET}")
+
+        print_anya_banner(bot_info)
+
+        # Polling loop with resilient auto-reconnect
+        while True:
+            try:
+                bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=True)
+            except KeyboardInterrupt:
+                print(f"\n{YELLOW}[*] Bot stopped by user (Ctrl+C).{RESET}")
+                time.sleep(1)
+                break
+            except Exception as poll_err:
+                print(f"\n{RED}[!] Polling glitch: {poll_err}{RESET}")
+                print(f"{YELLOW}[*] Auto-reconnecting in 5 seconds...{RESET}")
+                time.sleep(5)
+
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}[*] Bot stopped by user.{RESET}")
+    except Exception as fatal_err:
+        print("\n" + RED + "=" * 70 + RESET)
+        print(f"{BOLD}{RED} [!] CRITICAL ERROR OCCURRED:{RESET}")
+        print(RED + "=" * 70 + RESET)
+        import traceback
+        traceback.print_exc()
+        print(RED + "=" * 70 + RESET)
+        print(f"{YELLOW} [!] The console window will remain OPEN so you can see this error.{RESET}")
+        print(RED + "=" * 70 + RESET)
+        while True:
+            try:
+                input("\nPress Enter to exit...")
+                break
+            except Exception:
+                time.sleep(5)

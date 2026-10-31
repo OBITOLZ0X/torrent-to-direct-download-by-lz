@@ -4,6 +4,15 @@ import json
 import shutil
 import glob
 
+# Ensure UTF-8 output on Windows consoles
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
     BUNDLE_DIR = getattr(sys, "_MEIPASS", BASE_DIR)
@@ -24,10 +33,26 @@ DEFAULT_CONFIG = {
     "buzzheavier_account_id": "",
     "gofile_api_token": "",
     "aria2_port": 6800,
+    "aria2_rpc_secret": "",
     "aria2_path": "",
     "progress_update_interval": 2.5,
     "files_per_page": 8
 }
+
+# Terminal styling helpers (Anya Bot Theme)
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+MAGENTA = "\033[95m"
+WHITE = "\033[97m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+# Enable VT100 colors on Windows cmd
+if os.name == "nt":
+    os.system("color")
 
 def load_or_prompt_config() -> dict:
     """Load configuration from config.json or prompt in console on first run."""
@@ -38,36 +63,40 @@ def load_or_prompt_config() -> dict:
                 loaded = json.load(f)
                 config.update(loaded)
         except Exception as e:
-            print(f"[!] Warning reading config.json: {e}")
+            print(f"{YELLOW}[!] Warning reading config.json: {e}{RESET}")
 
     # Check if we need interactive setup
     token = config.get("bot_token", "").strip()
     admin_id = config.get("admin_id", 0)
 
     if not token or token == "YOUR_BOT_TOKEN_HERE" or not admin_id:
-        print("\n" + "=" * 60)
-        print("      Telegram Torrent-to-Stream Bot - Initial Setup")
-        print("=" * 60)
-        print("[!] No configuration found. Please enter required details:\n")
+        if os.name == "nt":
+            os.system("title Torrent Stream Bot - Initial Setup")
+        print("\n" + CYAN + "=" * 65 + RESET)
+        print(f"{BOLD}{WHITE}         ⚡ TORRENT STREAM BOT - INITIAL SETUP ⚡{RESET}")
+        print(CYAN + "=" * 65 + RESET)
+        print(f"{YELLOW}[!] No saved configuration found. Please enter bot credentials:{RESET}\n")
 
         while not token or token == "YOUR_BOT_TOKEN_HERE":
             try:
-                token = input("Enter Telegram Bot Token (from @BotFather): ").strip()
+                token = input(f"  {CYAN}▸{RESET} {WHITE}Enter Telegram Bot Token (from @BotFather):{RESET} ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n[!] Setup cancelled.")
+                print(f"\n{RED}[!] Setup cancelled by user.{RESET}")
+                input("\nPress Enter to exit...")
                 sys.exit(1)
             if not token:
-                print("[-] Token cannot be empty. Try again.")
+                print(f"  {RED}✗ Token cannot be empty. Try again.{RESET}")
 
         while not admin_id:
             try:
-                raw_admin = input("Enter Admin Chat ID (e.g. 123456789 from @userinfobot): ").strip()
+                raw_admin = input(f"  {CYAN}▸{RESET} {WHITE}Enter Admin Chat ID (e.g. 123456789 from @userinfobot):{RESET} ").strip()
                 if raw_admin.isdigit() or (raw_admin.startswith("-") and raw_admin[1:].isdigit()):
                     admin_id = int(raw_admin)
                 else:
-                    print("[-] Please enter a valid numerical Chat ID.")
+                    print(f"  {RED}✗ Please enter a valid numerical Chat ID.{RESET}")
             except (EOFError, KeyboardInterrupt):
-                print("\n[!] Setup cancelled.")
+                print(f"\n{RED}[!] Setup cancelled by user.{RESET}")
+                input("\nPress Enter to exit...")
                 sys.exit(1)
 
         config["bot_token"] = token
@@ -77,9 +106,9 @@ def load_or_prompt_config() -> dict:
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4)
-            print(f"[+] Configuration saved successfully to: {CONFIG_FILE}\n")
+            print(f"\n  {GREEN}✓{RESET} {WHITE}Configuration saved successfully to:{RESET} {CYAN}{CONFIG_FILE}{RESET}\n")
         except Exception as e:
-            print(f"[!] Failed to write config.json: {e}")
+            print(f"  {RED}✗ Failed to write config.json: {e}{RESET}")
 
     return config
 
@@ -91,6 +120,7 @@ ADMIN_ID = CURRENT_CONFIG.get("admin_id", 0)
 BUZZHEAVIER_ACCOUNT_ID = CURRENT_CONFIG.get("buzzheavier_account_id", "")
 GOFILE_API_TOKEN = CURRENT_CONFIG.get("gofile_api_token", "")
 ARIA2_PORT = int(CURRENT_CONFIG.get("aria2_port", 6800))
+ARIA2_RPC_SECRET = CURRENT_CONFIG.get("aria2_rpc_secret", "")
 ARIA2_RPC_URL = f"http://localhost:{ARIA2_PORT}/jsonrpc"
 PROGRESS_UPDATE_INTERVAL = float(CURRENT_CONFIG.get("progress_update_interval", 2.5))
 FILES_PER_PAGE = int(CURRENT_CONFIG.get("files_per_page", 8))
