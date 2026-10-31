@@ -34,6 +34,10 @@ class Aria2Manager:
         self.process = None
         self._ensure_daemon_running()
 
+    def start_aria2_daemon(self):
+        """Ensure aria2 daemon is actively running."""
+        return self._ensure_daemon_running()
+
     def _ensure_daemon_running(self):
         """Check if aria2 RPC is responding; if not, spawn it."""
         try:
