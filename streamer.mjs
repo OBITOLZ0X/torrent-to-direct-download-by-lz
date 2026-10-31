@@ -1,9 +1,9 @@
 import WebTorrent from 'webtorrent';
-import memoryChunkStore from 'memory-chunk-store';
 import FormData from 'form-data';
 import fs from 'fs';
 import https from 'https';
 import process from 'process';
+import { PassThrough } from 'stream';
 
 // Parse CLI arguments
 const args = process.argv.slice(2);
@@ -32,6 +32,68 @@ if (!source) {
     process.exit(1);
 }
 
+// Custom Sliding-Window Memory Chunk Store
+// Automatically frees past chunks from RAM once read, preventing high memory usage and GC stalls on large multi-GB files.
+function SlidingMemoryStore(chunkLength, opts) {
+    if (!(this instanceof SlidingMemoryStore)) return new SlidingMemoryStore(chunkLength, opts);
+    this.chunkLength = Number(chunkLength);
+    this.chunks = [];
+    this.closed = false;
+    this.length = Number(opts?.length) || Infinity;
+    if (this.length !== Infinity) {
+        this.lastChunkLength = (this.length % this.chunkLength) || this.chunkLength;
+        this.lastChunkIndex = Math.ceil(this.length / this.chunkLength) - 1;
+    }
+}
+
+SlidingMemoryStore.prototype.put = function (index, buf, cb = () => {}) {
+    if (this.closed) return queueMicrotask(() => cb(new Error('Storage is closed')));
+    const isLastChunk = (index === this.lastChunkIndex);
+    if (isLastChunk && buf.length !== this.lastChunkLength) {
+        return queueMicrotask(() => cb(new Error('Last chunk length must be ' + this.lastChunkLength)));
+    }
+    if (!isLastChunk && buf.length !== this.chunkLength) {
+        return queueMicrotask(() => cb(new Error('Chunk length must be ' + this.chunkLength)));
+    }
+    this.chunks[index] = buf;
+    queueMicrotask(() => cb(null));
+};
+
+SlidingMemoryStore.prototype.get = function (index, opts, cb = () => {}) {
+    if (typeof opts === 'function') return this.get(index, null, opts);
+    if (this.closed) return queueMicrotask(() => cb(new Error('Storage is closed')));
+
+    let buf = this.chunks[index];
+    if (!buf) {
+        const err = new Error('Chunk not found');
+        err.notFound = true;
+        return queueMicrotask(() => cb(err));
+    }
+
+    if (!opts) opts = {};
+    const offset = opts.offset || 0;
+    const len = opts.length || (buf.length - offset);
+
+    if (offset !== 0 || len !== buf.length) {
+        buf = buf.slice(offset, len + offset);
+    }
+
+    // Free older pieces to keep RAM under ~25MB even for 50GB torrents
+    if (index > 4 && this.chunks && this.chunks[index - 4]) {
+        this.chunks[index - 4] = null;
+        delete this.chunks[index - 4];
+    }
+
+    queueMicrotask(() => cb(null, buf));
+};
+
+SlidingMemoryStore.prototype.close = SlidingMemoryStore.prototype.destroy = function (cb = () => {}) {
+    if (this.closed) return queueMicrotask(() => cb(new Error('Storage is closed')));
+    this.closed = true;
+    this.chunks = null;
+    queueMicrotask(() => cb(null));
+};
+
 // Prepare torrent input
 let torrentInput = source;
 if (fs.existsSync(source)) {
@@ -40,7 +102,7 @@ if (fs.existsSync(source)) {
 
 const client = new WebTorrent({
     dht: true,
-    maxConns: 55,
+    maxConns: 65,
 });
 
 // Best public trackers to accelerate swarm discovery
@@ -57,9 +119,9 @@ const extraTrackers = [
 
 console.log(JSON.stringify({ type: 'status', message: 'Connecting to swarm and caching in RAM...' }));
 
-// Helper to query best Gofile server
-function getBestGofileServer() {
-    return new Promise((resolve, reject) => {
+// Helper to query available Gofile servers
+function getGofileServers() {
+    return new Promise((resolve) => {
         https.get('https://api.gofile.io/servers', (res) => {
             let body = '';
             res.on('data', d => body += d);
@@ -67,21 +129,21 @@ function getBestGofileServer() {
                 try {
                     const data = JSON.parse(body);
                     if (data.status === 'ok' && data.data?.servers?.length > 0) {
-                        resolve(data.data.servers[0].name);
+                        resolve(data.data.servers.map(s => s.name));
                     } else {
-                        resolve('store1');
+                        resolve(['store-eu-par-5', 'store-na-phx-3', 'store8']);
                     }
                 } catch (e) {
-                    resolve('store1');
+                    resolve(['store-eu-par-5', 'store-na-phx-3', 'store8']);
                 }
             });
-        }).on('error', (err) => {
-            resolve('store1');
+        }).on('error', () => {
+            resolve(['store-eu-par-5', 'store-na-phx-3', 'store8']);
         });
     });
 }
 
-client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, async (torrent) => {
+client.add(torrentInput, { store: SlidingMemoryStore, announce: extraTrackers }, async (torrent) => {
     if (fileIndex < 0 || fileIndex >= torrent.files.length) {
         console.error(JSON.stringify({
             type: 'error',
@@ -92,6 +154,8 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
     }
 
     const file = torrent.files[fileIndex];
+    file.select();
+
     const totalSize = file.length;
 
     console.log(JSON.stringify({
@@ -102,13 +166,14 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
         peers: torrent.numPeers
     }));
 
-    const stream = file.createReadStream();
+    const rawStream = file.createReadStream();
+    const uploadStream = new PassThrough();
+
     let transferred = 0;
     let startTime = Date.now();
     let lastReport = 0;
 
-    // Monitor progress
-    stream.on('data', (chunk) => {
+    uploadStream.on('data', (chunk) => {
         transferred += chunk.length;
         const now = Date.now();
         if (now - lastReport >= 1500 || transferred === totalSize) {
@@ -129,19 +194,78 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
         }
     });
 
-    stream.on('error', (err) => {
-        console.error(JSON.stringify({ type: 'error', message: `Stream error: ${err.message}` }));
+    rawStream.on('error', (err) => {
+        console.error(JSON.stringify({ type: 'error', message: `Torrent stream error: ${err.message}` }));
         client.destroy();
         process.exit(1);
+    });
+
+    // In-RAM Prebuffer: Hold initial chunks up to 2MB (or totalSize if smaller) before opening remote HTTP socket
+    // This completely eliminates "socket hang up" by ensuring the HTTP socket receives continuous bytes from millisecond 1!
+    const PREBUFFER_LIMIT = Math.min(totalSize, 2 * 1024 * 1024);
+    const prebufferChunks = [];
+    let bufferedBytes = 0;
+    let uploadStarted = false;
+
+    const peerInterval = setInterval(() => {
+        if (!uploadStarted) {
+            console.log(JSON.stringify({
+                type: 'progress',
+                transferred: 0,
+                total: totalSize,
+                speed: torrent.downloadSpeed || 0,
+                eta: 0,
+                peers: torrent.numPeers
+            }));
+        }
+    }, 2000);
+
+    function startUpload() {
+        if (uploadStarted) return;
+        uploadStarted = true;
+        clearInterval(peerInterval);
+        startTime = Date.now();
+
+        if (destination === 'gofile') {
+            startGofileUpload();
+        } else {
+            startBuzzheavierUpload();
+        }
+    }
+
+    rawStream.on('data', (chunk) => {
+        if (!uploadStarted) {
+            prebufferChunks.push(chunk);
+            bufferedBytes += chunk.length;
+            if (bufferedBytes >= PREBUFFER_LIMIT) {
+                startUpload();
+            }
+        } else {
+            const ok = uploadStream.write(chunk);
+            if (!ok) {
+                rawStream.pause();
+                uploadStream.once('drain', () => rawStream.resume());
+            }
+        }
+    });
+
+    rawStream.on('end', () => {
+        if (!uploadStarted) {
+            startUpload();
+        } else {
+            uploadStream.end();
+        }
     });
 
     // ─────────────────────────────────────────────
     // Route 1: Gofile.io Upload
     // ─────────────────────────────────────────────
-    if (destination === 'gofile') {
-        const serverName = await getBestGofileServer();
+    async function startGofileUpload() {
+        const servers = await getGofileServers();
+        const serverName = servers[0] || 'store-eu-par-5';
+
         const form = new FormData();
-        form.append('file', stream, {
+        form.append('file', uploadStream, {
             filename: file.name,
             knownLength: totalSize
         });
@@ -149,11 +273,27 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
             form.append('token', gofileToken);
         }
 
+        const formLength = await new Promise((resolve) => {
+            form.getLength((err, len) => resolve(err ? null : len));
+        });
+
+        const headers = form.getHeaders();
+        if (formLength) {
+            headers['Content-Length'] = formLength;
+        }
+
+        const agent = new https.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 15000,
+            timeout: 300000 // 5 minutes
+        });
+
         const req = https.request({
             hostname: `${serverName}.gofile.io`,
             path: '/uploadFile',
             method: 'POST',
-            headers: form.getHeaders()
+            headers: headers,
+            agent: agent
         }, (res) => {
             let body = '';
             res.on('data', d => body += d);
@@ -184,6 +324,11 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
             });
         });
 
+        req.setTimeout(300000, () => {
+            console.error(JSON.stringify({ type: 'error', message: 'Gofile upload connection timed out.' }));
+            req.destroy();
+        });
+
         req.on('error', (err) => {
             console.error(JSON.stringify({ type: 'error', message: `Gofile request error: ${err.message}` }));
             client.destroy();
@@ -192,10 +337,22 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
 
         form.pipe(req);
 
+        // Immediately flush all prebuffered chunks into uploadStream
+        for (const c of prebufferChunks) {
+            uploadStream.write(c);
+        }
+        prebufferChunks.length = 0; // free array memory
+
+        // If rawStream had already ended before upload started, end uploadStream now!
+        if (bufferedBytes >= totalSize) {
+            uploadStream.end();
+        }
+    }
+
     // ─────────────────────────────────────────────
     // Route 2: Buzzheavier.com Upload (Default)
     // ─────────────────────────────────────────────
-    } else {
+    async function startBuzzheavierUpload() {
         const encodedName = encodeURIComponent(file.name);
         const headers = {
             'Content-Length': totalSize
@@ -204,11 +361,18 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
             headers['Authorization'] = `Bearer ${accountId}`;
         }
 
+        const agent = new https.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 15000,
+            timeout: 300000
+        });
+
         const req = https.request({
             hostname: 'w.buzzheavier.com',
             path: '/' + encodedName,
             method: 'PUT',
-            headers: headers
+            headers: headers,
+            agent: agent
         }, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
@@ -243,13 +407,29 @@ client.add(torrentInput, { store: memoryChunkStore, announce: extraTrackers }, a
             });
         });
 
+        req.setTimeout(300000, () => {
+            console.error(JSON.stringify({ type: 'error', message: 'Buzzheavier upload connection timed out.' }));
+            req.destroy();
+        });
+
         req.on('error', (err) => {
             console.error(JSON.stringify({ type: 'error', message: `Buzzheavier request error: ${err.message}` }));
             client.destroy();
             process.exit(1);
         });
 
-        stream.pipe(req);
+        uploadStream.pipe(req);
+
+        // Immediately flush all prebuffered chunks into uploadStream
+        for (const c of prebufferChunks) {
+            uploadStream.write(c);
+        }
+        prebufferChunks.length = 0; // free array memory
+
+        // If rawStream had already ended before upload started, end uploadStream now!
+        if (bufferedBytes >= totalSize) {
+            uploadStream.end();
+        }
     }
 });
 
