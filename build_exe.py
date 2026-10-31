@@ -29,6 +29,13 @@ def build():
     ]
 
     # Re-evaluate: Since the bot prompts for token & admin ID on first run, it MUST have console!
+    # Ensure node_modules.zip exists
+    zip_path = os.path.join(BASE_DIR, "node_modules.zip")
+    node_modules_dir = os.path.join(BASE_DIR, "node_modules")
+    if not os.path.exists(zip_path) and os.path.exists(node_modules_dir):
+        print("[*] Creating node_modules.zip for standalone embedding...")
+        shutil.make_archive(os.path.join(BASE_DIR, "node_modules"), "zip", node_modules_dir)
+
     cmd = [
         sys.executable,
         "-m",
@@ -44,6 +51,8 @@ def build():
         f"package.json{os.pathsep}.",
         "--add-data",
         f"aria2c.exe{os.pathsep}.",
+        "--add-data",
+        f"node_modules.zip{os.pathsep}.",
         "--hidden-import",
         "telebot",
         "--hidden-import",
@@ -61,17 +70,22 @@ def build():
 
     dist_dir = os.path.join(BASE_DIR, "dist")
     dist_exe = os.path.join(dist_dir, "TorrentStreamBot.exe")
-    if os.path.exists(dist_exe):
-        # Also copy helper files alongside dist_exe for convenience
-        for fname in ["streamer.mjs", "aria2c.exe", "package.json"]:
-            src = os.path.join(BASE_DIR, fname)
-            dst = os.path.join(dist_dir, fname)
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.copy2(src, dst)
 
+    # Clean up dist so ONLY TorrentStreamBot.exe exists there
+    if os.path.exists(dist_dir):
+        for item in os.listdir(dist_dir):
+            if item.lower() != "torrentstreambot.exe":
+                item_path = os.path.join(dist_dir, item)
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path, ignore_errors=True)
+
+    if os.path.exists(dist_exe):
         print("\n" + "=" * 60)
         print("  BUILD SUCCESSFUL!")
-        print(f"  Standalone Executable created at: {dist_exe}")
+        print(f"  Single Standalone Executable created at: {dist_exe}")
+        print("  Everything (Python, Aria2, Streamer, Libraries) is bundled inside this ONE file!")
         print("=" * 60)
     else:
         print("\n[!] Build completed. Check 'dist' folder.")

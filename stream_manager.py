@@ -2,9 +2,42 @@ import os
 import sys
 import json
 import time
+import shutil
+import glob
+import zipfile
 import subprocess
 import threading
 from config import BASE_DIR, BUNDLE_DIR, BUZZHEAVIER_ACCOUNT_ID, GOFILE_API_TOKEN
+
+def find_node_executable() -> str:
+    """Find the node.exe executable across standard locations."""
+    for check_dir in [BUNDLE_DIR, BASE_DIR]:
+        local_node = os.path.join(check_dir, "node.exe")
+        if os.path.exists(local_node):
+            return local_node
+
+    which_node = shutil.which("node") or shutil.which("node.exe")
+    if which_node:
+        return which_node
+
+    candidates = [
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Program Files (x86)\nodejs\node.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\node\node.exe"),
+        os.path.expandvars(r"%APPDATA%\npm\node.exe"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        pattern = os.path.join(local_app_data, "Microsoft", "WinGet", "Packages", "**", "node.exe")
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            return matches[0]
+
+    return "node"
 
 class StreamManager:
     """
@@ -12,6 +45,7 @@ class StreamManager:
     Zero bytes are written to the RDP hard disk.
     """
     def __init__(self):
+        self.node_path = find_node_executable()
         self.streamer_script = os.path.join(BASE_DIR, "streamer.mjs")
         if not os.path.exists(self.streamer_script):
             bundle_script = os.path.join(BUNDLE_DIR, "streamer.mjs")
@@ -19,6 +53,23 @@ class StreamManager:
                 self.streamer_script = bundle_script
             else:
                 raise FileNotFoundError(f"Streamer script not found in {BASE_DIR} or {BUNDLE_DIR}")
+
+        self._ensure_node_modules()
+
+    def _ensure_node_modules(self):
+        """Extract bundled node_modules.zip if node_modules folder is absent."""
+        if os.path.isdir(os.path.join(BASE_DIR, "node_modules")) or os.path.isdir(os.path.join(BUNDLE_DIR, "node_modules")):
+            return
+
+        for search_dir in [BUNDLE_DIR, BASE_DIR]:
+            zip_file = os.path.join(search_dir, "node_modules.zip")
+            if os.path.exists(zip_file):
+                try:
+                    with zipfile.ZipFile(zip_file, "r") as zf:
+                        zf.extractall(search_dir)
+                    return
+                except Exception as e:
+                    print(f"[!] Warning unpacking node_modules.zip: {e}")
 
     def stream_file(
         self,
@@ -34,7 +85,7 @@ class StreamManager:
             (True, download_url) or (False, error_message)
         """
         cmd = [
-            "node",
+            self.node_path,
             self.streamer_script,
             "--source",
             torrent_source,
