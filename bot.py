@@ -188,6 +188,16 @@ except Exception as init_err:
 sessions: Dict[str, dict] = {}
 sessions_lock = threading.Lock()
 
+def is_user_transferring(user_id: int) -> bool:
+    """Check if the user already has an active live transfer in progress."""
+    with sessions_lock:
+        for s in sessions.values():
+            if s.get("user_id") == user_id and s.get("status") == "running":
+                cancel_ev = s.get("cancel_event")
+                if not (cancel_ev and cancel_ev.is_set()):
+                    return True
+    return False
+
 # Admin pending state for reply-based input prompts: admin_id -> {"action": "...", "mid": int, "cid": int, "return_menu": "..."}
 admin_pending: Dict[int, dict] = {}
 
@@ -750,7 +760,8 @@ def run_stream_pipeline(session_id: str, destination: str):
 
         # Record download usage in database
         if not cancel_event.is_set() and uploaded_results:
-            db.record_download_success(user_id, ADMIN_ID)
+            total_transferred_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
+            db.record_download_success(user_id, ADMIN_ID, bytes_transferred=total_transferred_bytes)
 
         # Final rendering
         if cancel_event.is_set():
@@ -819,6 +830,23 @@ def process_torrent_source(message: types.Message, magnet_link: str = None, torr
     chat_id = message.chat.id
     user_id = message.from_user.id
     user_name = message.from_user.username or message.from_user.first_name or "user"
+
+    # 1. Concurrent transfer restriction: User cannot start another transfer until their current one finishes
+    if user_id != ADMIN_ID and is_user_transferring(user_id):
+        bot.reply_to(
+            message,
+            f"⚠️ <b>ACTIVE TRANSFER IN PROGRESS</b>\n{SEP}\n"
+            f"<blockquote>You already have a transfer in progress.\n"
+            f"Please wait until it finishes or stop it before starting another.</blockquote>\n{SEP}"
+        )
+        return
+
+    # 2. Early quota check (5 torrents / 100 GB daily limit)
+    ok, reason = db.check_user_can_request(user_id, ADMIN_ID)
+    if not ok:
+        bot.reply_to(message, reason)
+        return
+
     status_msg = bot.reply_to(message, "🔍 <b>Fetching torrent metadata...</b> Please wait.")
 
     session_id = uuid.uuid4().hex[:8]
@@ -1227,8 +1255,9 @@ def render_limits_menu() -> tuple[str, types.InlineKeyboardMarkup]:
     stats = db.get_stats()
     text = (
         f"⏱️ <b>QUOTAS & LIMITS CONFIGURATION</b>\n{SEP}\n"
-        f"<blockquote>🔢 <b>Daily Download Limit:</b> <code>{stats['daily_limit']} links/day</code>\n"
-        f"📦 <b>Max Torrent Size:</b> <code>{stats['max_size_gb']} GB/torrent</code></blockquote>\n"
+        f"<blockquote>🔢 <b>Daily Torrents Limit:</b> <code>{stats['daily_limit']} torrents/day</code>\n"
+        f"📦 <b>Max Single File Size:</b> <code>{stats['max_size_gb']} GB/file</code>\n"
+        f"🌐 <b>Daily Total Bandwidth:</b> <code>{stats.get('daily_bandwidth_gb', 100.0)} GB/day</code></blockquote>\n"
         f"{SEP}\n"
         f"<i>Configure limits applied equally to all registered members:</i>"
     )
@@ -1236,8 +1265,9 @@ def render_limits_menu() -> tuple[str, types.InlineKeyboardMarkup]:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("✏️ Set Daily Limit", callback_data="cfg_set_daily_limit"),
-        types.InlineKeyboardButton("📦 Set Max Size", callback_data="cfg_set_max_size")
+        types.InlineKeyboardButton("📦 Set Max File Size", callback_data="cfg_set_max_size")
     )
+    kb.add(types.InlineKeyboardButton("🌐 Set Daily Bandwidth", callback_data="cfg_set_daily_bw"))
     kb.add(types.InlineKeyboardButton("← Back to Settings", callback_data="cfg_main"))
     return text, kb
 
@@ -1341,23 +1371,38 @@ def handle_account(message: types.Message):
     info = db.get_user_info(user_id)
     is_admin = (user_id == ADMIN_ID)
 
-    daily_limit = db.get_setting("daily_limit_regular", 5)
-    max_size_gb = db.get_setting("max_size_gb_regular", 40.0)
-    used_today = info.get("downloads_today", 0)
+    daily_limit = int(db.get_setting("daily_limit_regular", 5))
+    max_size_gb = float(db.get_setting("max_size_gb_regular", 40.0))
+    daily_bw_gb = float(db.get_setting("daily_bandwidth_gb_regular", 100.0))
 
-    quota_str = "Unlimited ♾️ (Admin)" if is_admin else f"{used_today} / {daily_limit} links"
-    max_sz_str = "Unlimited ♾️ (Admin)" if is_admin else f"{max_size_gb} GB"
+    today = db._today_str()
+    if info.get("today_date") != today:
+        used_today = 0
+        bytes_today = 0
+    else:
+        used_today = info.get("downloads_today", 0)
+        bytes_today = info.get("bytes_today", 0)
+
+    torrents_str = "Unlimited ♾️ (Admin)" if is_admin else f"<code>{used_today} / {daily_limit} torrents</code>"
+    bandwidth_str = "Unlimited ♾️ (Admin)" if is_admin else f"<code>{human_readable_size(bytes_today)} / {int(daily_bw_gb)} GB</code>"
+    max_sz_str = "Unlimited ♾️ (Admin)" if is_admin else f"<code>{int(max_size_gb)} GB</code>"
+    total_dl = info.get("total_downloads", 0)
+    total_bytes = info.get("total_bytes", 0)
+    total_str = f"<code>{total_dl} torrents</code> (<code>{human_readable_size(total_bytes)}</code>)"
 
     text = (
-        f"{EMOJI_PROGRESS} <b>ACCOUNT INFORMATION</b>\n"
+        f"{EMOJI_PROGRESS} <b>ACCOUNT USAGE & LIMITS</b>\n"
         f"{SEP}\n"
-        f"<blockquote>{EMOJI_USER} <b>Name:</b> {html.escape(user_name)}\n"
+        f"<blockquote>{EMOJI_USER} <b>User:</b> {html.escape(user_name)}\n"
         f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
         f"📅 <b>Registered:</b> <code>{info.get('registered_at', 'N/A')}</code>\n"
-        f"📊 <b>Today's Usage:</b> <code>{quota_str}</code>\n"
-        f"📦 <b>Max File Size:</b> <code>{max_sz_str}</code>\n"
-        f"📥 <b>Total Downloads:</b> <code>{info.get('total_downloads', 0)}</code></blockquote>\n"
-        f"{SEP}"
+        f"{SEP}\n"
+        f"📊 <b>Torrents Today:</b> {torrents_str}\n"
+        f"🌐 <b>Bandwidth Today:</b> {bandwidth_str}\n"
+        f"📦 <b>Max Single File:</b> {max_sz_str}\n"
+        f"📥 <b>Lifetime Transferred:</b> {total_str}</blockquote>\n"
+        f"{SEP}\n"
+        f"<i>💡 Daily quotas reset every day at 00:00 UTC.</i>"
     )
     bot.reply_to(message, text)
 
@@ -1516,7 +1561,7 @@ def handle_admin_reply_inputs(message: types.Message):
     elif action == "set_daily_limit":
         if val.isdigit() and int(val) > 0:
             db.set_setting("daily_limit_regular", int(val))
-            res = f"Daily limit set to: <b>{val} links/day</b>"
+            res = f"Daily torrents limit set to: <b>{val} torrents/day</b>"
         else:
             res = "❌ Invalid number. Limit unchanged."
         safe_edit_message(cid, mid, f"✅ <b>Updated!</b>\n{SEP}\n<blockquote>{res}</blockquote>\n{SEP}\n<i>Returning...</i>")
@@ -1529,7 +1574,22 @@ def handle_admin_reply_inputs(message: types.Message):
             sz = float(val)
             if sz > 0:
                 db.set_setting("max_size_gb_regular", sz)
-                res = f"Max torrent size set to: <b>{sz} GB</b>"
+                res = f"Max single file size set to: <b>{sz} GB</b>"
+            else:
+                res = "❌ Value must be greater than 0."
+        except ValueError:
+            res = "❌ Invalid number."
+        safe_edit_message(cid, mid, f"✅ <b>Updated!</b>\n{SEP}\n<blockquote>{res}</blockquote>\n{SEP}\n<i>Returning...</i>")
+        time.sleep(1.5)
+        return_to_submenu(cid, mid, "limits")
+        return
+
+    elif action == "set_daily_bw":
+        try:
+            bw = float(val)
+            if bw > 0:
+                db.set_setting("daily_bandwidth_gb_regular", bw)
+                res = f"Daily total bandwidth set to: <b>{bw} GB/day</b>"
             else:
                 res = "❌ Value must be greater than 0."
         except ValueError:
@@ -2093,8 +2153,8 @@ def handle_callbacks(call: types.CallbackQuery):
             prompt_admin_input(
                 cid, mid,
                 action="set_daily_limit",
-                title="DAILY LIMIT",
-                instructions="Enter daily download link limit for regular users (e.g. <code>5</code>):",
+                title="DAILY TORRENTS LIMIT",
+                instructions="Enter daily torrent limit for regular users (e.g. <code>5</code>):",
                 return_menu="limits"
             )
             bot.answer_callback_query(call.id)
@@ -2104,8 +2164,19 @@ def handle_callbacks(call: types.CallbackQuery):
             prompt_admin_input(
                 cid, mid,
                 action="set_max_size",
-                title="MAX TORRENT SIZE (GB)",
-                instructions="Enter maximum torrent file size in GB for regular users (e.g. <code>40.0</code>):",
+                title="MAX SINGLE FILE SIZE (GB)",
+                instructions="Enter maximum single file size in GB for regular users (e.g. <code>40.0</code>):",
+                return_menu="limits"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_set_daily_bw":
+            prompt_admin_input(
+                cid, mid,
+                action="set_daily_bw",
+                title="DAILY TOTAL BANDWIDTH (GB)",
+                instructions="Enter maximum total daily bandwidth in GB for regular users (e.g. <code>100.0</code>):",
                 return_menu="limits"
             )
             bot.answer_callback_query(call.id)
@@ -2234,12 +2305,25 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, "⚠️ Please select at least one file to download!", show_alert=True)
             return
 
+        if user_id != ADMIN_ID and is_user_transferring(user_id):
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ You already have an active transfer in progress! Please wait until it completes.",
+                show_alert=True
+            )
+            return
+
         selected_files = [f for f in session["files"] if f["index"] in session["selected"]]
         total_selected_size = sum(f["length"] for f in selected_files)
 
-        ok, reason = db.check_download_limit(user_id, ADMIN_ID, total_selected_size)
+        ok, reason = db.check_download_limit(
+            user_id,
+            ADMIN_ID,
+            total_size_bytes=total_selected_size,
+            files=selected_files
+        )
         if not ok:
-            bot.answer_callback_query(call.id, "Limit reached!", show_alert=False)
+            bot.answer_callback_query(call.id, "Limit exceeded!", show_alert=False)
             safe_edit_message(sess_chat_id, sess_message_id, reason, reply_markup=None)
             return
 
@@ -2261,6 +2345,13 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
 
     elif action == "start":
+        if user_id != ADMIN_ID and is_user_transferring(user_id):
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ You already have an active transfer in progress! Please wait until it completes.",
+                show_alert=True
+            )
+            return
         destination = parts[2] if len(parts) > 2 else "buzzheavier"
         bot.answer_callback_query(call.id, f"🚀 Starting transfer to {destination}...")
         session["status"] = "running"

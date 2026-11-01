@@ -48,6 +48,7 @@ class DatabaseManager:
                 "error_channel": "",
                 "daily_limit_regular": 5,
                 "max_size_gb_regular": 40.0,
+                "daily_bandwidth_gb_regular": 100.0,
                 "buzzheavier_account_id": "",
                 "gofile_api_token": "",
                 # Donation configurations
@@ -202,8 +203,10 @@ class DatabaseManager:
                             local_u = self.data["users"][uid]
                             if local_u.get("today_date") == uinfo.get("today_date"):
                                 local_u["downloads_today"] = max(local_u.get("downloads_today", 0), uinfo.get("downloads_today", 0))
+                                local_u["bytes_today"] = max(local_u.get("bytes_today", 0), uinfo.get("bytes_today", 0))
                             local_u["is_banned"] = uinfo.get("is_banned", local_u.get("is_banned", False))
                             local_u["total_downloads"] = max(local_u.get("total_downloads", 0), uinfo.get("total_downloads", 0))
+                            local_u["total_bytes"] = max(local_u.get("total_bytes", 0), uinfo.get("total_bytes", 0))
 
                     self._has_pending_changes = False
                     self._last_sync_time = time.time()
@@ -370,7 +373,9 @@ class DatabaseManager:
                     "is_banned": False,
                     "today_date": self._today_str(),
                     "downloads_today": 0,
-                    "total_downloads": 0
+                    "bytes_today": 0,
+                    "total_downloads": 0,
+                    "total_bytes": 0
                 }
                 self._has_pending_changes = True
                 self._save_cache()
@@ -398,6 +403,7 @@ class DatabaseManager:
             u = self.data["users"].get(uid)
             if u:
                 u["downloads_today"] = 0
+                u["bytes_today"] = 0
                 u["today_date"] = self._today_str()
                 self._has_pending_changes = True
                 self._save_cache()
@@ -461,7 +467,51 @@ class DatabaseManager:
 
         return True, ""
 
-    def check_download_limit(self, user_id: int, admin_id: int, total_size_bytes: int) -> Tuple[bool, str]:
+    def check_user_can_request(self, user_id: int, admin_id: int) -> Tuple[bool, str]:
+        """Early quota check before resolving metadata: verifies 5 torrents limit and 100 GB daily limit."""
+        if user_id == admin_id:
+            return True, ""
+
+        with self.lock:
+            uid = str(user_id)
+            user = self.data["users"].get(uid)
+            if not user:
+                return True, ""
+
+            today = self._today_str()
+            if user.get("today_date") != today:
+                user["today_date"] = today
+                user["downloads_today"] = 0
+                user["bytes_today"] = 0
+
+            daily_limit = int(self.data["settings"].get("daily_limit_regular", 5))
+            downloads_today = user.get("downloads_today", 0)
+            if downloads_today >= daily_limit:
+                return False, (
+                    f"⚠️ <b>DAILY LIMIT REACHED</b>\n\n"
+                    f"You have used all <b>{daily_limit}/{daily_limit}</b> torrent transfers for today.\n"
+                    f"Your daily quota resets tomorrow at 00:00 UTC."
+                )
+
+            daily_bw_gb = float(self.data["settings"].get("daily_bandwidth_gb_regular", 100.0))
+            daily_bw_bytes = daily_bw_gb * (1024 ** 3)
+            bytes_today = user.get("bytes_today", 0)
+            if bytes_today >= daily_bw_bytes:
+                return False, (
+                    f"⚠️ <b>DAILY BANDWIDTH LIMIT REACHED</b>\n\n"
+                    f"You have used all <b>{human_readable_size(bytes_today)} / {int(daily_bw_gb)} GB</b> of your daily bandwidth.\n"
+                    f"Your quota resets tomorrow at 00:00 UTC."
+                )
+
+            return True, ""
+
+    def check_download_limit(
+        self,
+        user_id: int,
+        admin_id: int,
+        total_size_bytes: int = 0,
+        files: Optional[List[dict]] = None
+    ) -> Tuple[bool, str]:
         if user_id == admin_id:
             return True, ""
 
@@ -475,29 +525,67 @@ class DatabaseManager:
             if user.get("today_date") != today:
                 user["today_date"] = today
                 user["downloads_today"] = 0
+                user["bytes_today"] = 0
 
-            max_size_gb = float(self.data["settings"].get("max_size_gb_regular", 40.0))
-            max_size_bytes = max_size_gb * (1024 ** 3)
-            if total_size_bytes > max_size_bytes:
-                sz_str = human_readable_size(total_size_bytes)
-                return False, (
-                    f"⚠️ <b>FILE SIZE LIMIT EXCEEDED</b>\n\n"
-                    f"Your requested torrent size is <b>{sz_str}</b>.\n"
-                    f"The maximum allowed size is <b>{max_size_gb} GB</b> per torrent."
-                )
-
+            # 1. Daily torrents limit (5 torrents per day)
             daily_limit = int(self.data["settings"].get("daily_limit_regular", 5))
             downloads_today = user.get("downloads_today", 0)
             if downloads_today >= daily_limit:
                 return False, (
                     f"⚠️ <b>DAILY LIMIT REACHED</b>\n\n"
-                    f"You have used all <b>{daily_limit}/{daily_limit}</b> downloads for today.\n"
+                    f"You have used all <b>{daily_limit}/{daily_limit}</b> torrent transfers for today.\n"
+                    f"Your quota resets tomorrow at 00:00 UTC."
+                )
+
+            # 2. Single file size limit (40 GB max per single file)
+            max_file_size_gb = float(self.data["settings"].get("max_size_gb_regular", 40.0))
+            max_file_size_bytes = max_file_size_gb * (1024 ** 3)
+
+            if files:
+                oversized = [f for f in files if f.get("length", 0) > max_file_size_bytes]
+                if oversized:
+                    bad_file = oversized[0]
+                    bad_name = bad_file.get("name", "Unknown File")
+                    bad_size = human_readable_size(bad_file.get("length", 0))
+                    return False, (
+                        f"⚠️ <b>SINGLE FILE SIZE LIMIT EXCEEDED</b>\n\n"
+                        f"File: <code>{bad_name}</code> (<b>{bad_size}</b>)\n"
+                        f"The maximum allowed size for a single file is <b>{int(max_file_size_gb)} GB</b>."
+                    )
+            elif total_size_bytes > max_file_size_bytes:
+                sz_str = human_readable_size(total_size_bytes)
+                return False, (
+                    f"⚠️ <b>FILE SIZE LIMIT EXCEEDED</b>\n\n"
+                    f"Requested size: <b>{sz_str}</b>\n"
+                    f"The maximum allowed size for a single file is <b>{int(max_file_size_gb)} GB</b>."
+                )
+
+            # 3. Daily total bandwidth limit (100 GB across all 5 torrents)
+            daily_bw_gb = float(self.data["settings"].get("daily_bandwidth_gb_regular", 100.0))
+            daily_bw_bytes = daily_bw_gb * (1024 ** 3)
+            bytes_today = user.get("bytes_today", 0)
+            requested_bytes = sum(f.get("length", 0) for f in files) if files else total_size_bytes
+
+            if bytes_today >= daily_bw_bytes:
+                return False, (
+                    f"⚠️ <b>DAILY BANDWIDTH LIMIT REACHED</b>\n\n"
+                    f"You have used all <b>{human_readable_size(bytes_today)} / {int(daily_bw_gb)} GB</b> of your daily bandwidth.\n"
+                    f"Your quota resets tomorrow at 00:00 UTC."
+                )
+
+            if (bytes_today + requested_bytes) > daily_bw_bytes:
+                remaining_bytes = max(0, daily_bw_bytes - bytes_today)
+                return False, (
+                    f"⚠️ <b>DAILY BANDWIDTH LIMIT EXCEEDED</b>\n\n"
+                    f"Today's usage: <b>{human_readable_size(bytes_today)} / {int(daily_bw_gb)} GB</b>\n"
+                    f"Transfer requires: <b>{human_readable_size(requested_bytes)}</b> (Remaining: <b>{human_readable_size(remaining_bytes)}</b>)\n\n"
+                    f"The maximum total bandwidth is <b>{int(daily_bw_gb)} GB</b> per day.\n"
                     f"Your quota resets tomorrow at 00:00 UTC."
                 )
 
             return True, ""
 
-    def record_download_success(self, user_id: int, admin_id: int):
+    def record_download_success(self, user_id: int, admin_id: int, bytes_transferred: int = 0):
         with self.lock:
             uid = str(user_id)
             user = self.data["users"].get(uid)
@@ -506,8 +594,11 @@ class DatabaseManager:
                 if user.get("today_date") != today:
                     user["today_date"] = today
                     user["downloads_today"] = 0
+                    user["bytes_today"] = 0
                 user["downloads_today"] = user.get("downloads_today", 0) + 1
+                user["bytes_today"] = user.get("bytes_today", 0) + max(0, bytes_transferred)
                 user["total_downloads"] = user.get("total_downloads", 0) + 1
+                user["total_bytes"] = user.get("total_bytes", 0) + max(0, bytes_transferred)
                 self._has_pending_changes = True
                 self._save_cache()
 
@@ -542,13 +633,20 @@ class DatabaseManager:
                 for u in self.data["users"].values()
                 if u.get("today_date") == today
             )
+            bytes_today = sum(
+                u.get("bytes_today", 0)
+                for u in self.data["users"].values()
+                if u.get("today_date") == today
+            )
             return {
                 "total_users": total_users,
                 "banned_users": banned_users,
                 "downloads_today": downloads_today,
+                "bytes_today": bytes_today,
                 "bot_mode": self.data["settings"].get("bot_mode", "admin_only"),
                 "daily_limit": self.data["settings"].get("daily_limit_regular", 5),
                 "max_size_gb": self.data["settings"].get("max_size_gb_regular", 40.0),
+                "daily_bandwidth_gb": self.data["settings"].get("daily_bandwidth_gb_regular", 100.0),
                 "bot_channel": self.data["settings"].get("bot_channel", ""),
                 "channel_invite": self.data["settings"].get("channel_invite", ""),
                 "results_channel": self.data["settings"].get("results_channel", ""),
