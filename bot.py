@@ -2381,7 +2381,7 @@ def handle_callbacks(call: types.CallbackQuery):
             ctrl = session.get("controller")
             if ctrl:
                 ctrl.pause()
-            bot.answer_callback_query(call.id, "⏸️ تم إيقاف التحميل مؤقتاً")
+            bot.answer_callback_query(call.id, "⏸️ Download paused.")
             last_text = session.get("last_rendered_text")
             if last_text:
                 paused_text = last_text.replace("DOWNLOADING TORRENT...", "DOWNLOAD PAUSED")
@@ -2405,7 +2405,7 @@ def handle_callbacks(call: types.CallbackQuery):
             ctrl = session.get("controller")
             if ctrl:
                 ctrl.resume()
-            bot.answer_callback_query(call.id, "▶️ جارٍ استئناف التحميل...")
+            bot.answer_callback_query(call.id, "▶️ Resuming download...")
             last_text = session.get("last_rendered_text")
             if last_text:
                 resumed_text = last_text.replace("DOWNLOAD PAUSED", "DOWNLOADING TORRENT...")
@@ -2438,8 +2438,8 @@ def handle_callbacks(call: types.CallbackQuery):
                 f"🛑 <b>CONFIRM STOP</b>\n{SEP}\n"
                 f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(t_name)}</code>\n"
                 f"{file_line}"
-                f"⚠️ <b>هل أنت متأكد من رغبتك في إيقاف التحميل والرفع بشكل نهائي؟</b></blockquote>\n{SEP}\n"
-                f"<i>اضغط <b>Yes</b> للإلغاء التام، أو <b>No</b> للرجوع لشاشة التحميل في وضع الإيقاف المؤقت.</i>"
+                f"⚠️ <b>Are you sure you want to stop the download and upload?</b></blockquote>\n{SEP}\n"
+                f"<i>Tap <b>Yes</b> to cancel completely, or <b>No</b> to return to download in paused state.</i>"
             )
             safe_edit_message(
                 session["chat_id"],
@@ -2469,7 +2469,7 @@ def handle_callbacks(call: types.CallbackQuery):
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
         if session:
-            bot.answer_callback_query(call.id, "↩️ تم الرجوع. التحميل في حالة إيقاف مؤقت (اضغط Continue للمتابعة)")
+            bot.answer_callback_query(call.id, "↩️ Returned. Transfer is paused. (Tap Continue to resume)")
             # As requested by user: return in paused state, must tap continue to resume
             session["is_paused"] = True
             last_text = session.get("last_rendered_text")
