@@ -5,76 +5,96 @@
 <h1 align="center">⚡ tDownUp</h1>
 
 <p align="center">
-  <b>High-Speed Torrent & Magnet to Direct Cloud Uploader Telegram Bot</b><br>
-  <i>Convert BitTorrent links into direct download links on Buzzheavier and Gofile instantly!</i>
+  <b>High-Speed Torrent & Magnet to Direct Cloud Transfer Telegram Bot</b><br>
+  <i>Direct live in-memory transfer pipe to Buzzheavier and Gofile with zero permanent disk footprint!</i>
 </p>
 
 ---
 
 ## 📖 What is tDownUp?
 
-**tDownUp** is an ultra-fast Telegram Bot built with Python (`pyTelegramBotAPI`) and Node.js (`WebTorrent`) that allows users to send any `.torrent` file or magnet link and receive direct high-speed download links on **[Buzzheavier.com](https://buzzheavier.com)** or **[Gofile.io](https://gofile.io)**.
+**tDownUp** is an ultra-fast Telegram Bot built with Python (`pyTelegramBotAPI`) and Node.js (`WebTorrent`) that enables users to convert BitTorrent magnet links or `.torrent` files directly into high-speed direct download links on **[Buzzheavier.com](https://buzzheavier.com)** and **[Gofile.io](https://gofile.io)**.
+
+The bot features a **pure live RAM transfer relay** — BitTorrent chunks are piped directly to the cloud storage API without writing temporary files to local disk.
 
 ---
 
 ## 📥 How to Use
 
-Using **tDownUp** is simple and intuitive:
-
 1. **Send a Torrent**:
    - Send `/dw <magnet_link>`
    - Or paste any magnet link directly (`magnet:?xt=...`)
-   - Or upload a `.torrent` file directly
+   - Or send a `.torrent` file directly
    - Or reply to any `.torrent` file with `/dw`
 
 2. **Select Files**:
-   - The bot reads the torrent contents and presents an interactive file checklist.
+   - The bot inspects the torrent contents and presents an interactive file checklist.
    - Tap any file to toggle it on (`✅`) or off (`❌`).
    - Use **`Select All`** or **`Deselect All`** for fast selection.
 
 3. **Choose Destination**:
    - Tap **`🐝 Buzzheavier`** or **`📁 Gofile.io`**.
 
-4. **Get Direct Links**:
-   - Watch the live progress dashboard.
-   - When finished, click your direct download links!
-   - Tap **`☕ Support & Donate`** to support server hosting and development.
+4. **Live Transfer Dashboard**:
+   - Watch live transfer speed, progress bar, ETA, and connected peer count.
+   - Click **`🛑 Stop Transfer`** at any time with safe confirmation.
+   - Upon completion, receive direct high-speed download links.
+   - Check account limits with `/account` or support hosting with `/donate`.
 
 ---
 
-## ✨ Features & Architecture
+## 🛡️ Fair-Use Quotas & Limits
 
-### 🐙 Token-Based Cloud Database (GitHub Contents API)
-- **Zero local `config.json`**: All settings and user data sync in real-time to a private, versioned GitHub database (`database.json`).
-- **Gatekeeper Protection:** The bot remains locked in safe **Admin Only Mode** until a valid GitHub token is provided in settings.
-- **Instant Sync:** User registrations, download counters, and channel settings commit immediately to your GitHub cloud storage.
+Applied automatically to maintain server stability and fair bandwidth distribution:
+
+- 🔒 **Single Concurrent Transfer:** A user cannot start another transfer until their active transfer finishes.
+- 🔢 **Daily Torrents Quota:** Up to **5 torrents per day** per user.
+- 📦 **Max Single File Size:** Maximum **40 GB** for any single file.
+- 🌐 **Daily Bandwidth Limit:** Up to **100 GB** total bandwidth per day across all torrents.
+- ⏰ **Daily Reset:** Quotas reset automatically every day at `00:00 UTC`.
+
+---
+
+## ✨ Architecture & Core Features
+
+### 🐙 Local-First GitHub Cloud Database
+- **Zero local `config.json`**: All settings and user database sync in real-time to a private GitHub repository (`database.json`).
+- **Local-First Speed:** Loads from GitHub on startup, operates instantly from local RAM, and pushes changes automatically every 2 minutes.
+- **Admin-Only Gatekeeper:** Locks safely in Admin-Only mode until a valid GitHub database token is configured.
 
 ### ⚙️ Covert Admin Control Panel (`/settings` or `/panel`)
-Hidden from regular users and accessible only by the configured `ADMIN_ID`:
-- **🐙 Database:** Connect, update, test, or refresh your GitHub Database Token and URL.
-- **📢 Channels:** Configure Bot Channel (force subscription), Invite Link, Results Channel (completed uploads feed), and Error Channel.
-- **☕ Donation Settings:** Set up PayPal, Binance Pay ID, and RedotPay-supported crypto networks:
-  - 🔴 Tron (TRC20 USDT)
-  - 🟡 BNB Smart Chain (BEP20)
-  - 🟣 Solana (SOL)
-  - 💎 The Open Network (TON)
-  - 🔷 Ethereum (ERC20)
-  - 🔵 Arbitrum One
-  - 🟡 opBNB
-- **👥 Members:** Search users by ID or username, view profiles, ban/unban, and reset daily quotas.
-- **⏱️ Quotas & Limits:** Configure daily link limits and max file sizes applied equally to all registered users.
+Accessible exclusively by the configured `ADMIN_ID`:
+- **🐙 Database:** Connect, test, refresh, or inspect GitHub Cloud Database synchronization.
+- **📢 Channels:** Configure Bot Channel (force-join verification), Invite Link, Results Channel (broadcast completed transfers), and Error Channel.
+- **⏱️ Quotas & Limits:** Configure daily torrent limits, max file sizes, and daily bandwidth limits.
+- **☕ Donation Methods:** Configure PayPal, Binance Pay ID, and crypto addresses (USDT TRC20, BEP20, Solana, TON, ERC20, Arbitrum, opBNB).
+- **👥 Members Management:** Search users, view stats, ban/unban members, and reset daily quotas.
 - **📢 Broadcast:** Send announcements to all registered users simultaneously.
-
-### 🎨 Clean User Experience
-- No internal server jargon or confusing technical descriptions in chat.
-- Transparent progress bar with transfer rate, ETA, and active peer count.
-- Dynamic contact info to reach the bot owner for help.
 
 ---
 
-## 📦 Standalone Executable (`tDownUp.exe`)
+## 🐧 Linux Server & VPS Deployment
 
-The entire project (Python runtime, Node.js, Aria2c, WebTorrent engine, packages, and custom icon) compiles into a **single standalone file**:
+**tDownUp** is 100% cross-platform with zero external binary dependencies. To run on any Linux VPS or server (Ubuntu, Debian, CentOS):
+
+```bash
+# 1. Clone repository
+git clone https://github.com/OBITOLZ0X/torrent-to-direct-download-by-lz.git
+cd torrent-to-direct-download-by-lz
+
+# 2. Install dependencies
+pip install -r requirements.txt
+npm install
+
+# 3. Start the bot
+python bot.py
+```
+
+---
+
+## 📦 Standalone Windows Executable (`tDownUp.exe`)
+
+The entire project (Python runtime, Node.js, WebTorrent transfer engine, and icon) compiles into a **single standalone file**:
 
 ```text
 dist/tDownUp.exe
@@ -84,6 +104,4 @@ dist/tDownUp.exe
 ```bash
 python build_exe.py
 ```
-Or simply double-click `build.bat`.
-
-You can move `tDownUp.exe` alone to any Windows computer or RDP without installing Python, Node.js, or Aria2!
+Or double-click `build.bat`.

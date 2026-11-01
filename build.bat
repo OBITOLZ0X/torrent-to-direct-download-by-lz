@@ -1,7 +1,7 @@
 @echo off
-title Build TorrentStreamBot to EXE
+title Build tDownUp to Standalone EXE
 echo ========================================================
-echo        Building TorrentStreamBot to Standalone EXE       
+echo             Building tDownUp to Standalone EXE          
 echo ========================================================
 
 :: Check Python

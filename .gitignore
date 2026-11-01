@@ -8,7 +8,6 @@ __pycache__/
 build/
 dist/
 *.exe
-!aria2c.exe
 
 # Node modules
 node_modules/
@@ -27,7 +26,7 @@ database.json
 
 # Downloads & torrent temporary files
 downloads/
-*.aria2
+metadata_torrents/
 *.torrent
 
 # IDEs & OS files
