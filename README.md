@@ -55,21 +55,36 @@ All configuration adjustments utilize **in-place message editing** and **reply-b
   - ✅ **Results Channel:** Automatically broadcasts a rich success card whenever a torrent finishes streaming (File Name, Size, Host, Direct Download URL, Uploader).
   - ❌ **Error Channel:** Automatically broadcasts error alert cards whenever a stream fails.
   - 🧪 Built-in **Test Buttons** for all channels to verify bot administrator permissions.
+- **☕ Donation Settings & Multi-Network Support:**
+  - Dedicated **`☕ Support & Donate`** button appended to every completed transfer message.
+  - Configurable payment options in `/settings`:
+    - 🅿️ **PayPal**
+    - 🟡 **Binance Pay ID**
+    - 🔴 **USDT (TRC20)**
+    - 🟡 **BNB Smart Chain (BEP20)**
+    - 🟣 **Solana (SOL)**
+    - 💎 **The Open Network (TON)**
+    - 🔷 **Ethereum (ERC20)**
+    - 🔵 **Arbitrum One**
+    - 🟡 **opBNB**
+    - 📝 **Custom Donation Note**
 - **👥 Members Management:**
-  - Database overview (Total users, Premium users, Banned users, Today's active count).
-  - Paginated user directory (`All Members`, `Premium`, `Banned`) with ◀️ Prev / Next ▶️ buttons.
+  - Database overview (Total users, Banned users, Today's active count).
+  - Paginated user directory (`All Members`, `Banned`) with ◀️ Prev / Next ▶️ buttons.
   - **Search User:** Instant lookup by numerical Telegram ID or `@username`.
   - **User Profile View:** View user's registration date, today's usage, and total downloads.
-  - Quick action buttons: `⭐ Toggle Premium`, `🚫 Toggle Ban`, `🔄 Reset Daily Quota`.
+  - Quick action buttons: `🚫 Ban / Unban User`, `🔄 Reset Daily Quota`.
 - **🔐 Access Modes:**
   - `Admin Only Mode` (safe maintenance mode).
-  - `Premium Only Mode` (reserved for upgraded members).
   - `Public Mode` (open to all registered users).
 - **⏱️ Quotas & Limits:**
-  - Adjust daily download links limit for regular users (default: 5 links/day).
-  - Adjust maximum torrent file size in GB for regular users (default: 40 GB).
-  - Premium and Admin members enjoy **Unlimited** daily links and file sizes.
+  - Standardized limits applied equally to all members:
+    - Daily download links limit (default: 5 links/day).
+    - Maximum torrent file size in GB (default: 40 GB).
 - **📢 Global Broadcast:** Send instant announcements to all registered users simultaneously.
+- **🤫 Covert Admin Controls & Dynamic Owner Contact:**
+  - `/settings` is entirely invisible in `/start` and `/help` to keep the user experience clean.
+  - Owner contact info is dynamically fetched from the Telegram API via `ADMIN_ID` and displayed for assistance.
 
 ### 🎯 Interactive File Selection & Dual Destinations
 - Parse any torrent magnet link or `.torrent` file.

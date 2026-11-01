@@ -86,6 +86,26 @@ sessions_lock = threading.Lock()
 # Admin pending state for reply-based input prompts: admin_id -> {"action": "...", "mid": int, "cid": int, "return_menu": "..."}
 admin_pending: Dict[int, dict] = {}
 
+# Cached admin contact string
+_admin_contact_cache: Optional[str] = None
+
+def get_admin_contact() -> str:
+    """Dynamically retrieve admin username or mention from Telegram API using ADMIN_ID."""
+    global _admin_contact_cache
+    if _admin_contact_cache:
+        return _admin_contact_cache
+    try:
+        chat = bot.get_chat(ADMIN_ID)
+        if chat.username:
+            _admin_contact_cache = f"@{chat.username}"
+            return _admin_contact_cache
+        elif chat.first_name:
+            _admin_contact_cache = f'<a href="tg://user?id={ADMIN_ID}">{html.escape(chat.first_name)}</a>'
+            return _admin_contact_cache
+    except Exception:
+        pass
+    return f'<a href="tg://user?id={ADMIN_ID}">the Owner</a>'
+
 def safe_edit_message(chat_id: int, message_id: int, text: str, reply_markup=None):
     """Safely edit message text handling rate limits and unmodified text."""
     try:
@@ -271,6 +291,62 @@ def render_selection_message(session_id: str) -> str:
         f"When ready, click 'Start Downloading'.</i>"
     )
 
+# ================= Public Donation Card =================
+
+def render_donation_card() -> str:
+    """Build the public donation card with configured payment methods."""
+    paypal = db.get_setting("donation_paypal", "").strip()
+    binance = db.get_setting("donation_binance_id", "").strip()
+    trc20 = db.get_setting("donation_trc20", "").strip()
+    bep20 = db.get_setting("donation_bep20", "").strip()
+    sol = db.get_setting("donation_solana", "").strip()
+    ton = db.get_setting("donation_ton", "").strip()
+    erc20 = db.get_setting("donation_erc20", "").strip()
+    arb = db.get_setting("donation_arbitrum", "").strip()
+    opbnb = db.get_setting("donation_opbnb", "").strip()
+    note = db.get_setting("donation_note", "").strip()
+
+    sections = []
+    if paypal:
+        sections.append(f"🅿️ <b>PayPal:</b>\n<code>{html.escape(paypal)}</code>")
+    if binance:
+        sections.append(f"🟡 <b>Binance Pay ID:</b>\n<code>{html.escape(binance)}</code>")
+    if trc20:
+        sections.append(f"🔴 <b>USDT (TRC20):</b>\n<code>{html.escape(trc20)}</code>")
+    if bep20:
+        sections.append(f"🟡 <b>BNB Smart Chain (BEP20):</b>\n<code>{html.escape(bep20)}</code>")
+    if sol:
+        sections.append(f"🟣 <b>Solana (SOL):</b>\n<code>{html.escape(sol)}</code>")
+    if ton:
+        sections.append(f"💎 <b>The Open Network (TON):</b>\n<code>{html.escape(ton)}</code>")
+    if erc20:
+        sections.append(f"🔷 <b>Ethereum (ERC20):</b>\n<code>{html.escape(erc20)}</code>")
+    if arb:
+        sections.append(f"🔵 <b>Arbitrum One:</b>\n<code>{html.escape(arb)}</code>")
+    if opbnb:
+        sections.append(f"🟡 <b>opBNB:</b>\n<code>{html.escape(opbnb)}</code>")
+
+    if not sections:
+        admin_contact = get_admin_contact()
+        return (
+            f"💖 <b>SUPPORT & DONATE</b>\n{SEP}\n"
+            f"<blockquote>Thank you for your generosity! Donation methods are currently being updated.\n\n"
+            f"Please reach out directly to {admin_contact} to support the project.</blockquote>\n{SEP}"
+        )
+
+    text = (
+        f"💖 <b>SUPPORT & DONATE</b>\n{SEP}\n"
+        f"<blockquote>If you enjoy using this bot, please consider supporting the project to keep the servers, high-speed bandwidth, and development alive!</blockquote>\n\n"
+        f"<b>💳 AVAILABLE PAYMENT METHODS:</b>\n{SEP}\n" +
+        "\n\n".join(sections) + "\n" +
+        f"{SEP}\n"
+    )
+    if note:
+        text += f"<blockquote>ℹ️ <b>Note:</b> {html.escape(note)}</blockquote>\n{SEP}\n"
+
+    text += "<i>💡 Tap any address or ID to copy it directly. Thank you for your support! 🙏</i>"
+    return text
+
 # ================= Direct Live Stream Pipeline =================
 
 def run_stream_pipeline(session_id: str, destination: str):
@@ -299,7 +375,6 @@ def run_stream_pipeline(session_id: str, destination: str):
     uploaded_results = []
 
     last_ui_update = [0.0]
-    stream_start_time = time.time()
 
     try:
         for step_num, file_info in enumerate(files_to_stream, 1):
@@ -307,7 +382,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 break
 
             idx = file_info["index"]
-            zero_idx = idx - 1  # 0-based index for webtorrent streamer
+            zero_idx = idx - 1
             fname = file_info["name"]
             fsize = file_info["length"]
             fsize_str = human_readable_size(fsize)
@@ -369,7 +444,6 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"<b>Reason:</b> {html.escape(error_msg)}",
                     reply_markup=None,
                 )
-                # Dispatch notification to error channel if configured
                 err_channel = db.get_setting("error_channel", "").strip()
                 if err_channel:
                     try:
@@ -388,7 +462,6 @@ def run_stream_pipeline(session_id: str, destination: str):
 
             uploaded_results.append((fname, result, fsize_str, fsize))
 
-            # Dispatch notification to results channel for each uploaded file
             res_channel = db.get_setting("results_channel", "").strip()
             if res_channel:
                 try:
@@ -430,10 +503,12 @@ def run_stream_pipeline(session_id: str, destination: str):
                 f"{links_section}\n"
                 f"💾 <i>0 Bytes retained on RDP.</i>"
             )
-            safe_edit_message(chat_id, message_id, done_text, reply_markup=None)
+            # Add Donate Button below completion message
+            done_kb = types.InlineKeyboardMarkup()
+            done_kb.add(types.InlineKeyboardButton("☕ Support & Donate", callback_data="pub_show_donation"))
+            safe_edit_message(chat_id, message_id, done_text, reply_markup=done_kb)
 
     finally:
-        # Strictly clean up temporary torrent metadata file
         cleanup_torrent_file(torrent_path)
         with sessions_lock:
             sessions.pop(session_id, None)
@@ -512,7 +587,6 @@ def render_settings_main() -> tuple[str, types.InlineKeyboardMarkup]:
     stats = db.get_stats()
     bot_mode = stats["bot_mode"]
 
-    # Cloud DB status indicator
     if stats["git_token"]:
         gh = GitHubClient(stats["git_token"])
         db_icon = "🟢 Connected" if gh.test_token() else "🔴 Invalid Token"
@@ -524,7 +598,7 @@ def render_settings_main() -> tuple[str, types.InlineKeyboardMarkup]:
         f"<blockquote>👑 <b>Admin ID:</b> <code>{ADMIN_ID}</code>\n"
         f"🤖 <b>Bot Mode:</b> <code>{bot_mode.upper()}</code>\n"
         f"🐙 <b>Cloud DB:</b> <code>{db_icon}</code>\n"
-        f"👥 <b>Users:</b> <code>{stats['total_users']}</code> (⭐ <code>{stats['premium_users']}</code> | 🚫 <code>{stats['banned_users']}</code>)\n"
+        f"👥 <b>Users:</b> <code>{stats['total_users']}</code> (🚫 <code>{stats['banned_users']}</code>)\n"
         f"📢 <b>Bot Channel:</b> <code>{stats['bot_channel'] or 'Not Set'}</code>\n"
         f"✅ <b>Results Channel:</b> <code>{stats['results_channel'] or 'Not Set'}</code>\n"
         f"❌ <b>Error Channel:</b> <code>{stats['error_channel'] or 'Not Set'}</code></blockquote>\n"
@@ -539,13 +613,16 @@ def render_settings_main() -> tuple[str, types.InlineKeyboardMarkup]:
     )
     kb.add(
         types.InlineKeyboardButton("👥 Members", callback_data="cfg_members"),
-        types.InlineKeyboardButton("🔐 Access Modes", callback_data="cfg_modes")
+        types.InlineKeyboardButton("☕ Donations", callback_data="cfg_donations")
     )
     kb.add(
-        types.InlineKeyboardButton("⏱️ Quotas & Limits", callback_data="cfg_limits"),
-        types.InlineKeyboardButton("📢 Broadcast", callback_data="cfg_broadcast")
+        types.InlineKeyboardButton("🔐 Access Modes", callback_data="cfg_modes"),
+        types.InlineKeyboardButton("⏱️ Quotas & Limits", callback_data="cfg_limits")
     )
-    kb.add(types.InlineKeyboardButton("❌ Close Panel", callback_data="cfg_close"))
+    kb.add(
+        types.InlineKeyboardButton("📢 Broadcast", callback_data="cfg_broadcast"),
+        types.InlineKeyboardButton("❌ Close Panel", callback_data="cfg_close")
+    )
     return text, kb
 
 def render_github_menu() -> tuple[str, types.InlineKeyboardMarkup]:
@@ -637,6 +714,61 @@ def render_channels_menu() -> tuple[str, types.InlineKeyboardMarkup]:
     kb.add(types.InlineKeyboardButton("← Back to Settings", callback_data="cfg_main"))
     return text, kb
 
+def render_donations_menu() -> tuple[str, types.InlineKeyboardMarkup]:
+    """Render Donations Configuration Submenu (PayPal, Binance ID & RedotPay crypto networks)."""
+    stats = db.get_stats()
+    p = stats.get("donation_paypal") or "Not Set"
+    b = stats.get("donation_binance_id") or "Not Set"
+    trc = stats.get("donation_trc20") or "Not Set"
+    bep = stats.get("donation_bep20") or "Not Set"
+    sol = stats.get("donation_solana") or "Not Set"
+    ton = stats.get("donation_ton") or "Not Set"
+    erc = stats.get("donation_erc20") or "Not Set"
+    arb = stats.get("donation_arbitrum") or "Not Set"
+    opbnb = stats.get("donation_opbnb") or "Not Set"
+    note = stats.get("donation_note") or "None"
+
+    text = (
+        f"☕ <b>DONATION SETTINGS & PAYMENT METHODS</b>\n{SEP}\n"
+        f"<blockquote>🅿️ <b>PayPal:</b> <code>{p}</code>\n"
+        f"🟡 <b>Binance ID:</b> <code>{b}</code>\n"
+        f"🔴 <b>USDT (TRC20):</b> <code>{trc}</code>\n"
+        f"🟡 <b>BNB (BEP20):</b> <code>{bep}</code>\n"
+        f"🟣 <b>Solana:</b> <code>{sol}</code>\n"
+        f"💎 <b>TON:</b> <code>{ton}</code>\n"
+        f"🔷 <b>ETH (ERC20):</b> <code>{erc}</code>\n"
+        f"🔵 <b>Arbitrum One:</b> <code>{arb}</code>\n"
+        f"🟡 <b>opBNB:</b> <code>{opbnb}</code>\n"
+        f"📝 <b>Note:</b> <code>{note}</code></blockquote>\n"
+        f"{SEP}\n"
+        f"<i>Tap below to add, update, or clear any payment method:</i>"
+    )
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🅿️ Set PayPal", callback_data="cfg_don_paypal"),
+        types.InlineKeyboardButton("🟡 Set Binance ID", callback_data="cfg_don_binance")
+    )
+    kb.add(
+        types.InlineKeyboardButton("🔴 Set TRC20", callback_data="cfg_don_trc20"),
+        types.InlineKeyboardButton("🟡 Set BEP20", callback_data="cfg_don_bep20")
+    )
+    kb.add(
+        types.InlineKeyboardButton("🟣 Set Solana", callback_data="cfg_don_solana"),
+        types.InlineKeyboardButton("💎 Set TON", callback_data="cfg_don_ton")
+    )
+    kb.add(
+        types.InlineKeyboardButton("🔷 Set ERC20", callback_data="cfg_don_erc20"),
+        types.InlineKeyboardButton("🔵 Set Arbitrum", callback_data="cfg_don_arbitrum")
+    )
+    kb.add(
+        types.InlineKeyboardButton("🟡 Set opBNB", callback_data="cfg_don_opbnb"),
+        types.InlineKeyboardButton("📝 Set Note", callback_data="cfg_don_note")
+    )
+    kb.add(types.InlineKeyboardButton("🧪 Preview Donation Card", callback_data="cfg_don_preview"))
+    kb.add(types.InlineKeyboardButton("← Back to Settings", callback_data="cfg_main"))
+    return text, kb
+
 def render_members_menu() -> tuple[str, types.InlineKeyboardMarkup]:
     """Render Members Management Submenu."""
     stats = db.get_stats()
@@ -644,7 +776,6 @@ def render_members_menu() -> tuple[str, types.InlineKeyboardMarkup]:
         f"👥 <b>MEMBERS MANAGEMENT</b>\n{SEP}\n"
         f"📊 <b>DATABASE OVERVIEW</b>\n"
         f"<blockquote>👤 <b>Total Users:</b> {stats['total_users']}</blockquote>\n"
-        f"<blockquote>⭐ <b>Premium Members:</b> {stats['premium_users']}</blockquote>\n"
         f"<blockquote>🚫 <b>Banned Users:</b> {stats['banned_users']}</blockquote>\n"
         f"<blockquote>📅 <b>Active Today:</b> {stats['downloads_today']}</blockquote>\n"
         f"{SEP}\n"
@@ -654,20 +785,13 @@ def render_members_menu() -> tuple[str, types.InlineKeyboardMarkup]:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("👤 All Members", callback_data="cfg_mem_all_0"),
-        types.InlineKeyboardButton("⭐ Premium Users", callback_data="cfg_mem_prem_0")
+        types.InlineKeyboardButton("🚫 Banned Users", callback_data="cfg_mem_ban_0")
     )
     kb.add(
-        types.InlineKeyboardButton("🚫 Banned Users", callback_data="cfg_mem_ban_0"),
-        types.InlineKeyboardButton("🔍 Search User", callback_data="cfg_mem_search")
+        types.InlineKeyboardButton("🔍 Search User", callback_data="cfg_mem_search"),
+        types.InlineKeyboardButton("🚫 Ban User", callback_data="cfg_mem_ban")
     )
-    kb.add(
-        types.InlineKeyboardButton("⭐ Add Premium", callback_data="cfg_mem_grant_prem"),
-        types.InlineKeyboardButton("❌ Del Premium", callback_data="cfg_mem_revoke_prem")
-    )
-    kb.add(
-        types.InlineKeyboardButton("🚫 Ban User", callback_data="cfg_mem_ban"),
-        types.InlineKeyboardButton("🟢 Unban User", callback_data="cfg_mem_unban")
-    )
+    kb.add(types.InlineKeyboardButton("🟢 Unban User", callback_data="cfg_mem_unban"))
     kb.add(types.InlineKeyboardButton("← Back to Settings", callback_data="cfg_main"))
     return text, kb
 
@@ -679,7 +803,7 @@ def render_members_list(filter_type: str = "all", page: int = 0) -> tuple[str, t
     total_pages = max(1, (total_users + per_page - 1) // per_page)
     page = max(0, min(page, total_pages - 1))
 
-    title_map = {"all": "ALL MEMBERS", "premium": "PREMIUM USERS", "banned": "BANNED USERS"}
+    title_map = {"all": "ALL MEMBERS", "banned": "BANNED USERS"}
     list_title = title_map.get(filter_type, "MEMBERS")
 
     start = page * per_page
@@ -698,12 +822,10 @@ def render_members_list(filter_type: str = "all", page: int = 0) -> tuple[str, t
         for u in page_users:
             uid = u["user_id"]
             uname = f"@{u['username']}" if u.get("username") else f"ID: {uid}"
-            prem_badge = "⭐ " if u.get("is_premium") else ""
             ban_badge = "🚫 " if u.get("is_banned") else ""
-            label = f"{ban_badge}{prem_badge}{uname} ({u.get('downloads_today', 0)} today)"
+            label = f"{ban_badge}{uname} ({u.get('downloads_today', 0)} today)"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"cfg_mem_prof_{uid}"))
 
-    # Pagination row
     nav_row = []
     if page > 0:
         nav_row.append(types.InlineKeyboardButton("◀️ Prev", callback_data=f"cfg_mem_{filter_type[:3]}_{page - 1}"))
@@ -727,7 +849,6 @@ def render_user_profile(user_id: int) -> tuple[str, types.InlineKeyboardMarkup]:
 
     uname = f"@{u['username']}" if u.get("username") else "None"
     status_label = db.get_user_status_label(user_id, ADMIN_ID)
-    is_prem = u.get("is_premium", False)
     is_ban = u.get("is_banned", False)
 
     text = (
@@ -742,14 +863,12 @@ def render_user_profile(user_id: int) -> tuple[str, types.InlineKeyboardMarkup]:
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
-    prem_btn = "❌ Revoke Premium" if is_prem else "⭐ Grant Premium"
     ban_btn = "🟢 Unban User" if is_ban else "🚫 Ban User"
 
     kb.add(
-        types.InlineKeyboardButton(prem_btn, callback_data=f"cfg_tog_prem_{user_id}"),
-        types.InlineKeyboardButton(ban_btn, callback_data=f"cfg_tog_ban_{user_id}")
+        types.InlineKeyboardButton(ban_btn, callback_data=f"cfg_tog_ban_{user_id}"),
+        types.InlineKeyboardButton("🔄 Reset Daily Downloads", callback_data=f"cfg_reset_dl_{user_id}")
     )
-    kb.add(types.InlineKeyboardButton("🔄 Reset Daily Downloads", callback_data=f"cfg_reset_dl_{user_id}"))
     kb.add(types.InlineKeyboardButton("← Back to Members", callback_data="cfg_members"))
     return text, kb
 
@@ -765,20 +884,17 @@ def render_modes_menu() -> tuple[str, types.InlineKeyboardMarkup]:
         f"🐙 <b>Cloud DB:</b> {'🟢 Connected' if db_connected else '🔴 Offline / Not Configured'}</blockquote>\n"
         f"{SEP}\n"
         f"<b>Modes Description:</b>\n"
-        f"• <b>Admin Only:</b> Only you can use the bot (default safe mode)\n"
-        f"• <b>Premium Only:</b> Only users with Premium tier can use the bot\n"
+        f"• <b>Admin Only:</b> Only you can use the bot (safe maintenance mode)\n"
         f"• <b>Public:</b> Anyone registered can use the bot within daily quotas\n"
         f"{SEP}\n"
-        f"⚠️ <i>Public and Premium modes require a connected GitHub Cloud Database!</i>"
+        f"⚠️ <i>Public mode requires a connected GitHub Cloud Database!</i>"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=1)
     admin_mark = " (Active)" if current_mode == "admin_only" else ""
-    prem_mark = " (Active)" if current_mode == "premium" else ""
     pub_mark = " (Active)" if current_mode == "public" else ""
 
     kb.add(types.InlineKeyboardButton(f"🔐 Admin Only Mode{admin_mark}", callback_data="cfg_set_mode_admin"))
-    kb.add(types.InlineKeyboardButton(f"⭐ Premium Only Mode{prem_mark}", callback_data="cfg_set_mode_premium"))
     kb.add(types.InlineKeyboardButton(f"🌐 Public Mode{pub_mark}", callback_data="cfg_set_mode_public"))
     kb.add(types.InlineKeyboardButton("← Back to Settings", callback_data="cfg_main"))
     return text, kb
@@ -788,11 +904,10 @@ def render_limits_menu() -> tuple[str, types.InlineKeyboardMarkup]:
     stats = db.get_stats()
     text = (
         f"⏱️ <b>QUOTAS & LIMITS CONFIGURATION</b>\n{SEP}\n"
-        f"<blockquote>🔢 <b>Regular Daily Limit:</b> <code>{stats['daily_limit']} links/day</code>\n"
-        f"📦 <b>Regular Max Size:</b> <code>{stats['max_size_gb']} GB/torrent</code>\n"
-        f"⭐ <b>Premium Users:</b> <code>UNLIMITED ♾️</code></blockquote>\n"
+        f"<blockquote>🔢 <b>Daily Download Limit:</b> <code>{stats['daily_limit']} links/day</code>\n"
+        f"📦 <b>Max Torrent Size:</b> <code>{stats['max_size_gb']} GB/torrent</code></blockquote>\n"
         f"{SEP}\n"
-        f"<i>Configure limits for regular registered members:</i>"
+        f"<i>Configure limits applied equally to all registered members:</i>"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -806,10 +921,7 @@ def render_limits_menu() -> tuple[str, types.InlineKeyboardMarkup]:
 # ================= Prompt Input Helper =================
 
 def prompt_admin_input(chat_id: int, message_id: int, action: str, title: str, instructions: str, return_menu: str, extra: dict = None):
-    """
-    Edits the current settings message to an input prompt with a [Cancel] button.
-    Stores the pending state so the next reply from the admin is intercepted.
-    """
+    """Edits current settings message to prompt with [Cancel] button."""
     admin_pending[ADMIN_ID] = {
         "action": action,
         "mid": message_id,
@@ -834,6 +946,7 @@ def return_to_submenu(chat_id: int, message_id: int, return_menu: str):
         "main": render_settings_main,
         "github": render_github_menu,
         "channels": render_channels_menu,
+        "donations": render_donations_menu,
         "members": render_members_menu,
         "modes": render_modes_menu,
         "limits": render_limits_menu
@@ -842,26 +955,31 @@ def return_to_submenu(chat_id: int, message_id: int, return_menu: str):
     text, kb = renderer()
     safe_edit_message(chat_id, message_id, text, reply_markup=kb)
 
-# ================= Admin Commands & Routing =================
+# ================= Telegram Commands =================
 
 @bot.message_handler(commands=["settings", "panel"])
 def handle_settings(message: types.Message):
-    """Open Admin Control Panel."""
+    """Admin settings command (secretly accessed by admin only)."""
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "🚫 <b>Access Denied:</b> This command is restricted to the bot Administrator.")
         return
 
     text, kb = render_settings_main()
     bot.send_message(message.chat.id, text, reply_markup=kb)
 
+@bot.message_handler(commands=["donate"])
+def handle_donate_command(message: types.Message):
+    """Direct command to view donation information."""
+    bot.reply_to(message, render_donation_card(), disable_web_page_preview=True)
+
 @bot.message_handler(commands=["start", "help"])
 def handle_start(message: types.Message):
-    """Welcome and usage instructions."""
+    """Welcome and usage instructions. Clean layout with owner contact and no settings leaks."""
     if not check_user_access(message):
         return
 
     user_id = message.from_user.id
     status_label = db.get_user_status_label(user_id, ADMIN_ID)
+    admin_contact = get_admin_contact()
 
     text = (
         "👋 <b>Welcome to the Torrent-to-Direct Stream Bot!</b>\n\n"
@@ -876,30 +994,30 @@ def handle_start(message: types.Message):
         "• Or directly send a <code>.torrent</code> file\n"
         "• Or simply paste any magnet link!\n\n"
         "📌 <b>Commands:</b>\n"
-        "• <code>/account</code> - View your account quota & limits\n"
+        "• <code>/account</code> - View your daily downloads quota & limits\n"
+        "• <code>/donate</code> - Support the project & server hosting\n\n"
+        "💬 <b>Support & Assistance:</b>\n"
+        f"If you need help or have questions, contact {admin_contact}."
     )
-    if user_id == ADMIN_ID:
-        text += "• <code>/settings</code> - Open Admin Control Panel 👑\n"
-
     bot.reply_to(message, text, disable_web_page_preview=True)
 
 @bot.message_handler(commands=["account"])
 def handle_account(message: types.Message):
-    """View user quota, limits, and tier."""
+    """View user quota and limits."""
     if not check_user_access(message):
         return
 
     user_id = message.from_user.id
     status_label = db.get_user_status_label(user_id, ADMIN_ID)
     info = db.get_user_info(user_id)
-    is_prem = db.is_premium(user_id) or user_id == ADMIN_ID
+    is_admin = (user_id == ADMIN_ID)
 
     daily_limit = db.get_setting("daily_limit_regular", 5)
     max_size_gb = db.get_setting("max_size_gb_regular", 40.0)
     used_today = info.get("downloads_today", 0)
 
-    quota_str = "Unlimited ♾️" if is_prem else f"{used_today} / {daily_limit} links"
-    max_sz_str = "Unlimited ♾️" if is_prem else f"{max_size_gb} GB"
+    quota_str = "Unlimited ♾️ (Admin)" if is_admin else f"{used_today} / {daily_limit} links"
+    max_sz_str = "Unlimited ♾️ (Admin)" if is_admin else f"{max_size_gb} GB"
 
     text = (
         "💳 <b>ACCOUNT INFORMATION</b>\n"
@@ -986,7 +1104,6 @@ def handle_admin_reply_inputs(message: types.Message):
     return_menu = pending.get("return_menu", "main")
     val = (message.text or "").strip()
 
-    # Try to delete admin's reply message to keep the chat clean
     try:
         bot.delete_message(message.chat.id, message.message_id)
     except Exception:
@@ -1093,7 +1210,35 @@ def handle_admin_reply_inputs(message: types.Message):
         return_to_submenu(cid, mid, "limits")
         return
 
-    # 5. Members Actions
+    # 5. Donations
+    elif action.startswith("don_"):
+        key_map = {
+            "don_paypal": ("donation_paypal", "PayPal"),
+            "don_binance": ("donation_binance_id", "Binance Pay ID"),
+            "don_trc20": ("donation_trc20", "USDT (TRC20)"),
+            "don_bep20": ("donation_bep20", "BNB Smart Chain (BEP20)"),
+            "don_solana": ("donation_solana", "Solana"),
+            "don_ton": ("donation_ton", "The Open Network (TON)"),
+            "don_erc20": ("donation_erc20", "Ethereum (ERC20)"),
+            "don_arbitrum": ("donation_arbitrum", "Arbitrum One"),
+            "don_opbnb": ("donation_opbnb", "opBNB"),
+            "don_note": ("donation_note", "Donation Note"),
+        }
+        if action in key_map:
+            db_key, label = key_map[action]
+            if val.lower() in ("none", "0", "clear"):
+                db.set_setting(db_key, "")
+                res = f"{label} cleared."
+            else:
+                db.set_setting(db_key, val)
+                res = f"{label} updated to:\n<code>{val}</code>"
+
+            safe_edit_message(cid, mid, f"✅ <b>Updated!</b>\n{SEP}\n<blockquote>{res}</blockquote>\n{SEP}\n<i>Returning...</i>")
+            time.sleep(1.5)
+            return_to_submenu(cid, mid, "donations")
+            return
+
+    # 6. Members Actions
     elif action == "search_user":
         found = db.search_users(val)
         if not found:
@@ -1102,12 +1247,10 @@ def handle_admin_reply_inputs(message: types.Message):
             return_to_submenu(cid, mid, "members")
             return
         elif len(found) == 1:
-            # Open user profile directly
             text, kb = render_user_profile(found[0]["user_id"])
             safe_edit_message(cid, mid, text, reply_markup=kb)
             return
         else:
-            # Render match list
             text = f"🔍 <b>SEARCH RESULTS FOR:</b> <code>{val}</code>\n{SEP}\n"
             kb = types.InlineKeyboardMarkup(row_width=1)
             for u in found[:10]:
@@ -1117,34 +1260,6 @@ def handle_admin_reply_inputs(message: types.Message):
             kb.add(types.InlineKeyboardButton("← Back to Members", callback_data="cfg_members"))
             safe_edit_message(cid, mid, text, reply_markup=kb)
             return
-
-    elif action == "grant_premium":
-        if val.isdigit():
-            target_uid = int(val)
-            db.set_premium(target_uid, True)
-            res = f"User <code>{target_uid}</code> granted <b>Premium</b> ⭐!"
-            try:
-                bot.send_message(target_uid, "🎉 <b>Congratulations!</b> You have been upgraded to <b>Premium</b>! You now enjoy unlimited file sizes and daily links.")
-            except Exception:
-                pass
-        else:
-            res = "❌ Invalid numerical User ID."
-        safe_edit_message(cid, mid, f"✅ <b>Updated!</b>\n{SEP}\n<blockquote>{res}</blockquote>\n{SEP}\n<i>Returning...</i>")
-        time.sleep(1.5)
-        return_to_submenu(cid, mid, "members")
-        return
-
-    elif action == "revoke_premium":
-        if val.isdigit():
-            target_uid = int(val)
-            db.set_premium(target_uid, False)
-            res = f"Premium revoked for user <code>{target_uid}</code>."
-        else:
-            res = "❌ Invalid numerical User ID."
-        safe_edit_message(cid, mid, f"✅ <b>Updated!</b>\n{SEP}\n<blockquote>{res}</blockquote>\n{SEP}\n<i>Returning...</i>")
-        time.sleep(1.5)
-        return_to_submenu(cid, mid, "members")
-        return
 
     elif action == "ban_user":
         if val.isdigit():
@@ -1170,7 +1285,7 @@ def handle_admin_reply_inputs(message: types.Message):
         return_to_submenu(cid, mid, "members")
         return
 
-    # 6. Broadcast
+    # 7. Broadcast
     elif action == "broadcast":
         all_users = db.get_all_user_ids()
         safe_edit_message(cid, mid, f"📢 <b>Broadcasting message to {len(all_users)} users...</b>\n{SEP}\n<blockquote>⏳ Sending...</blockquote>")
@@ -1223,13 +1338,18 @@ def handle_callbacks(call: types.CallbackQuery):
         )
         return
 
-    # 2. Admin Settings Callbacks
+    # 2. Public Donation Card Trigger (from completion message)
+    if data == "pub_show_donation":
+        bot.answer_callback_query(call.id, "💖 Thank you for supporting the project!")
+        bot.send_message(cid, render_donation_card(), disable_web_page_preview=True)
+        return
+
+    # 3. Admin Settings Callbacks
     if data.startswith("cfg_"):
         if user_id != ADMIN_ID:
             bot.answer_callback_query(call.id, "Unauthorized.", show_alert=True)
             return
 
-        # Main & Close
         if data == "cfg_main":
             text, kb = render_settings_main()
             safe_edit_message(cid, mid, text, reply_markup=kb)
@@ -1252,7 +1372,7 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id)
             return
 
-        # Navigation to Submenus
+        # Navigation
         elif data == "cfg_github":
             text, kb = render_github_menu()
             safe_edit_message(cid, mid, text, reply_markup=kb)
@@ -1261,6 +1381,12 @@ def handle_callbacks(call: types.CallbackQuery):
 
         elif data == "cfg_channels":
             text, kb = render_channels_menu()
+            safe_edit_message(cid, mid, text, reply_markup=kb)
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_donations":
+            text, kb = render_donations_menu()
             safe_edit_message(cid, mid, text, reply_markup=kb)
             bot.answer_callback_query(call.id)
             return
@@ -1294,8 +1420,127 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id)
             return
 
+        # ── Donation Settings Operations ──
+        elif data == "cfg_don_paypal":
+            prompt_admin_input(
+                cid, mid,
+                action="don_paypal",
+                title="PAYPAL",
+                instructions="Enter your PayPal email address or paypal.me link (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_binance":
+            prompt_admin_input(
+                cid, mid,
+                action="don_binance",
+                title="BINANCE PAY ID",
+                instructions="Enter your Binance Pay ID / numerical ID (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_trc20":
+            prompt_admin_input(
+                cid, mid,
+                action="don_trc20",
+                title="TRON (TRC20) USDT",
+                instructions="Enter your USDT (TRC20) deposit address (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_bep20":
+            prompt_admin_input(
+                cid, mid,
+                action="don_bep20",
+                title="BNB SMART CHAIN (BEP20)",
+                instructions="Enter your BNB / USDT (BEP20) deposit address (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_solana":
+            prompt_admin_input(
+                cid, mid,
+                action="don_solana",
+                title="SOLANA (SOL)",
+                instructions="Enter your Solana deposit address (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_ton":
+            prompt_admin_input(
+                cid, mid,
+                action="don_ton",
+                title="THE OPEN NETWORK (TON)",
+                instructions="Enter your TON deposit address / memo (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_erc20":
+            prompt_admin_input(
+                cid, mid,
+                action="don_erc20",
+                title="ETHEREUM (ERC20)",
+                instructions="Enter your Ethereum (ERC20) address (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_arbitrum":
+            prompt_admin_input(
+                cid, mid,
+                action="don_arbitrum",
+                title="ARBITRUM ONE",
+                instructions="Enter your Arbitrum One address (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_opbnb":
+            prompt_admin_input(
+                cid, mid,
+                action="don_opbnb",
+                title="OPBNB",
+                instructions="Enter your opBNB address (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_note":
+            prompt_admin_input(
+                cid, mid,
+                action="don_note",
+                title="DONATION NOTE",
+                instructions="Enter a custom note or instructions to show under donation options (or send <code>none</code> to clear):",
+                return_menu="donations"
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_don_preview":
+            preview_card = render_donation_card()
+            safe_edit_message(cid, mid, preview_card, reply_markup=types.InlineKeyboardMarkup().add(
+                types.InlineKeyboardButton("← Back to Donation Settings", callback_data="cfg_donations")
+            ))
+            bot.answer_callback_query(call.id)
+            return
+
         # ── GitHub Submenu Operations ──
-        elif data == "cfg_gh_add_token" or data == "cfg_gh_update_token":
+        elif data in ("cfg_gh_add_token", "cfg_gh_update_token"):
             action = "update_github_token" if data == "cfg_gh_update_token" else "add_github_token"
             prompt_admin_input(
                 cid, mid,
@@ -1421,7 +1666,7 @@ def handle_callbacks(call: types.CallbackQuery):
                 bot.answer_callback_query(call.id, "No Bot Channel configured.", show_alert=True)
                 return
             try:
-                bot.send_message(ch, f"📢 <b>Test Message:</b> Bot Channel connection is working properly!")
+                bot.send_message(ch, "📢 <b>Test Message:</b> Bot Channel connection is working properly!")
                 bot.answer_callback_query(call.id, "✅ Test message sent to Bot Channel!", show_alert=True)
             except Exception as e:
                 bot.answer_callback_query(call.id, f"❌ Test failed: {e}", show_alert=True)
@@ -1433,7 +1678,7 @@ def handle_callbacks(call: types.CallbackQuery):
                 bot.answer_callback_query(call.id, "No Results Channel configured.", show_alert=True)
                 return
             try:
-                bot.send_message(ch, f"🚀 <b>Test Broadcast:</b> Results Channel integration is active!")
+                bot.send_message(ch, "🚀 <b>Test Broadcast:</b> Results Channel integration is active!")
                 bot.answer_callback_query(call.id, "✅ Test message sent to Results Channel!", show_alert=True)
             except Exception as e:
                 bot.answer_callback_query(call.id, f"❌ Test failed: {e}", show_alert=True)
@@ -1445,7 +1690,7 @@ def handle_callbacks(call: types.CallbackQuery):
                 bot.answer_callback_query(call.id, "No Error Channel configured.", show_alert=True)
                 return
             try:
-                bot.send_message(ch, f"❌ <b>Test Broadcast:</b> Error Channel integration is active!")
+                bot.send_message(ch, "❌ <b>Test Broadcast:</b> Error Channel integration is active!")
                 bot.answer_callback_query(call.id, "✅ Test message sent to Error Channel!", show_alert=True)
             except Exception as e:
                 bot.answer_callback_query(call.id, f"❌ Test failed: {e}", show_alert=True)
@@ -1455,16 +1700,6 @@ def handle_callbacks(call: types.CallbackQuery):
         elif data == "cfg_set_mode_admin":
             ok, res = db.set_bot_mode("admin_only")
             bot.answer_callback_query(call.id, "Switched to Admin Only mode.")
-            text, kb = render_modes_menu()
-            safe_edit_message(cid, mid, text, reply_markup=kb)
-            return
-
-        elif data == "cfg_set_mode_premium":
-            ok, res = db.set_bot_mode("premium")
-            if not ok:
-                bot.answer_callback_query(call.id, "❌ Connect GitHub Database Token first!", show_alert=True)
-            else:
-                bot.answer_callback_query(call.id, "Switched to Premium Only mode.")
             text, kb = render_modes_menu()
             safe_edit_message(cid, mid, text, reply_markup=kb)
             return
@@ -1503,9 +1738,9 @@ def handle_callbacks(call: types.CallbackQuery):
             return
 
         # ── Members Submenu & Paginated Lists ──
-        elif data.startswith("cfg_mem_all_") or data.startswith("cfg_mem_pre_") or data.startswith("cfg_mem_ban_"):
+        elif data.startswith("cfg_mem_all_") or data.startswith("cfg_mem_ban_"):
             parts = data.split("_")
-            ftype = "all" if parts[2] == "all" else ("premium" if parts[2] == "pre" else "banned")
+            ftype = "all" if parts[2] == "all" else "banned"
             page = int(parts[3])
             text, kb = render_members_list(filter_type=ftype, page=page)
             safe_edit_message(cid, mid, text, reply_markup=kb)
@@ -1517,15 +1752,6 @@ def handle_callbacks(call: types.CallbackQuery):
             text, kb = render_user_profile(target_uid)
             safe_edit_message(cid, mid, text, reply_markup=kb)
             bot.answer_callback_query(call.id)
-            return
-
-        elif data.startswith("cfg_tog_prem_"):
-            target_uid = int(data.split("_")[3])
-            current_status = db.is_premium(target_uid)
-            db.set_premium(target_uid, not current_status)
-            bot.answer_callback_query(call.id, f"Premium {'Revoked' if current_status else 'Granted'}")
-            text, kb = render_user_profile(target_uid)
-            safe_edit_message(cid, mid, text, reply_markup=kb)
             return
 
         elif data.startswith("cfg_tog_ban_"):
@@ -1556,28 +1782,6 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id)
             return
 
-        elif data == "cfg_mem_grant_prem":
-            prompt_admin_input(
-                cid, mid,
-                action="grant_premium",
-                title="GRANT PREMIUM",
-                instructions="Enter numerical User ID to grant Premium access:",
-                return_menu="members"
-            )
-            bot.answer_callback_query(call.id)
-            return
-
-        elif data == "cfg_mem_revoke_prem":
-            prompt_admin_input(
-                cid, mid,
-                action="revoke_premium",
-                title="REVOKE PREMIUM",
-                instructions="Enter numerical User ID to revoke Premium access:",
-                return_menu="members"
-            )
-            bot.answer_callback_query(call.id)
-            return
-
         elif data == "cfg_mem_ban":
             prompt_admin_input(
                 cid, mid,
@@ -1600,7 +1804,7 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id)
             return
 
-    # 3. Torrent / Stream Session Callbacks
+    # 4. Torrent / Stream Session Callbacks
     if ":" not in data:
         bot.answer_callback_query(call.id)
         return
@@ -1753,13 +1957,11 @@ def main():
 
     print_anya_banner(bot_info)
 
-    # Start Aria2 in background for metadata fetching
     try:
         aria2.start_aria2_daemon()
     except Exception as e:
         print(f"{YELLOW}[!] Notice starting Aria2 daemon: {e}{RESET}")
 
-    # Polling loop with crash immunity
     restart_count = 0
     while True:
         try:

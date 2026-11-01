@@ -1,6 +1,7 @@
 """
 Database Manager Module — Cloud Synced with GitHub API.
-No local config.json needed. Remote GitHub storage with local cache fallback.
+Manages users, quotas, channels, and donation configurations.
+No premium tier; standard limits apply to all registered members.
 """
 
 import os
@@ -16,7 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, ".db_cache.json")
 
 class DatabaseManager:
-    """Central database managing users, quotas, channels, and cloud synchronization."""
+    """Central database managing users, quotas, channels, donations, and cloud synchronization."""
 
     def __init__(self, cache_path: str = CACHE_FILE):
         self.cache_path = cache_path
@@ -38,13 +39,24 @@ class DatabaseManager:
                 "daily_limit_regular": 5,
                 "max_size_gb_regular": 40.0,
                 "buzzheavier_account_id": "",
-                "gofile_api_token": ""
+                "gofile_api_token": "",
+                # Donation configurations
+                "donation_paypal": "",
+                "donation_binance_id": "",
+                "donation_trc20": "",
+                "donation_bep20": "",
+                "donation_solana": "",
+                "donation_ton": "",
+                "donation_erc20": "",
+                "donation_arbitrum": "",
+                "donation_opbnb": "",
+                "donation_note": ""
             },
             "users": {}
         }
 
     def _load_cache(self) -> dict:
-        """Load database from local encrypted/hidden cache if available."""
+        """Load database from local cache if available."""
         defaults = self._get_default_structure()
         if os.path.exists(self.cache_path):
             try:
@@ -73,7 +85,6 @@ class DatabaseManager:
         token = self.data["settings"].get("git_token", "").strip()
         if token:
             self._github_client = GitHubClient(token)
-            # Try initial background sync
             threading.Thread(target=self.sync_from_github, daemon=True).start()
 
     def _today_str(self) -> str:
@@ -101,11 +112,10 @@ class DatabaseManager:
             client = GitHubClient(token)
             remote = client.read_file(url, as_json=True)
             if remote and isinstance(remote, dict):
-                # Merge remote settings and users
                 remote_settings = remote.get("settings", {})
                 remote_users = remote.get("users", {})
 
-                # Keep our current git_token if remote didn't have it
+                # Merge settings
                 for k, v in remote_settings.items():
                     if k != "git_token" or v:
                         self.data["settings"][k] = v
@@ -115,11 +125,9 @@ class DatabaseManager:
                     if uid not in self.data["users"]:
                         self.data["users"][uid] = uinfo
                     else:
-                        # Keep the most up-to-date today download count
                         local_u = self.data["users"][uid]
                         if local_u.get("today_date") == uinfo.get("today_date"):
                             local_u["downloads_today"] = max(local_u.get("downloads_today", 0), uinfo.get("downloads_today", 0))
-                        local_u["is_premium"] = uinfo.get("is_premium", local_u.get("is_premium", False))
                         local_u["is_banned"] = uinfo.get("is_banned", local_u.get("is_banned", False))
 
                 self._save_cache()
@@ -159,7 +167,6 @@ class DatabaseManager:
             self.data["settings"]["git_token"] = token
             self._github_client = client
 
-            # Check if database_url already exists, else auto-provision
             current_url = self.data["settings"].get("database_url", "").strip()
             if not current_url:
                 ok, res_url = client.auto_setup_repo_and_file(
@@ -192,7 +199,6 @@ class DatabaseManager:
         with self.lock:
             self.data["settings"]["database_url"] = url
             self._save_cache()
-            # Try to fetch from this URL
             if self.is_github_connected():
                 self.sync_from_github()
                 self.sync_to_github(async_call=True)
@@ -202,19 +208,19 @@ class DatabaseManager:
 
     def set_bot_mode(self, mode: str) -> Tuple[bool, str]:
         """
-        Switch bot mode between 'admin_only', 'premium', and 'public'.
-        STRICT CONSTRAINT: 'premium' and 'public' REQUIRE a valid connected GitHub token!
+        Switch bot mode between 'admin_only' and 'public'.
+        STRICT CONSTRAINT: 'public' mode REQUIRES a valid connected GitHub token!
         """
         mode = mode.lower()
-        if mode not in ("admin_only", "premium", "public"):
-            return False, "Invalid mode."
+        if mode not in ("admin_only", "public"):
+            return False, "Invalid mode. Must be 'admin_only' or 'public'."
 
         with self.lock:
-            if mode in ("premium", "public"):
+            if mode == "public":
                 if not self.is_github_connected():
                     return False, (
                         "❌ <b>ACTION BLOCKED:</b>\n\n"
-                        "You <b>cannot</b> switch to <b>Public</b> or <b>Premium</b> mode without configuring a valid GitHub Database Token!\n\n"
+                        "You <b>cannot</b> switch to <b>Public</b> mode without configuring a valid GitHub Database Token!\n\n"
                         "Please go to <b>Database (GitHub)</b> in Settings and enter your GitHub token first."
                     )
 
@@ -236,7 +242,6 @@ class DatabaseManager:
                     "user_id": user_id,
                     "username": username or "",
                     "registered_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "is_premium": False,
                     "is_banned": False,
                     "today_date": self._today_str(),
                     "downloads_today": 0,
@@ -245,20 +250,6 @@ class DatabaseManager:
                 self.sync_to_github(async_call=True)
                 return True
             return False
-
-    def is_premium(self, user_id: int) -> bool:
-        with self.lock:
-            u = self.data["users"].get(str(user_id))
-            return bool(u and u.get("is_premium", False))
-
-    def set_premium(self, user_id: int, status: bool) -> bool:
-        with self.lock:
-            uid = str(user_id)
-            if uid not in self.data["users"]:
-                self.register_user(user_id)
-            self.data["users"][uid]["is_premium"] = status
-            self.sync_to_github(async_call=True)
-            return True
 
     def is_banned(self, user_id: int) -> bool:
         with self.lock:
@@ -290,10 +281,8 @@ class DatabaseManager:
             return "👑 Admin / Owner"
         if self.is_banned(user_id):
             return "🚫 Banned"
-        if self.is_premium(user_id):
-            return "⭐ Premium Member"
         if self.is_registered(user_id):
-            return "👤 Regular User"
+            return "👤 Registered User"
         return "❌ Not Registered"
 
     def get_user_info(self, user_id: int) -> dict:
@@ -310,9 +299,6 @@ class DatabaseManager:
         results = []
         with self.lock:
             for uid_str, u in self.data["users"].items():
-                # Filter check
-                if filter_type == "premium" and not u.get("is_premium"):
-                    continue
                 if filter_type == "banned" and not u.get("is_banned"):
                     continue
 
@@ -325,9 +311,7 @@ class DatabaseManager:
         """Get list of users sorted by registration date."""
         with self.lock:
             users = list(self.data["users"].values())
-            if filter_type == "premium":
-                users = [u for u in users if u.get("is_premium")]
-            elif filter_type == "banned":
+            if filter_type == "banned":
                 users = [u for u in users if u.get("is_banned")]
             return sorted(users, key=lambda x: x.get("registered_at", ""), reverse=True)
 
@@ -344,17 +328,14 @@ class DatabaseManager:
         if bot_mode == "admin_only":
             return False, "🔒 <b>MAINTENANCE:</b> The bot is currently in Admin-Only mode. Please check back later."
 
-        if bot_mode == "premium" and not self.is_premium(user_id):
-            return False, "⭐ <b>PREMIUM ONLY:</b> The bot is currently reserved for Premium members. Contact admin to upgrade!"
-
         if not self.is_registered(user_id):
             return False, "REGISTRATION_REQUIRED"
 
         return True, ""
 
     def check_download_limit(self, user_id: int, admin_id: int, total_size_bytes: int) -> Tuple[bool, str]:
-        if user_id == admin_id or self.is_premium(user_id):
-            return True, ""  # Premium and Admin have unlimited quota & size!
+        if user_id == admin_id:
+            return True, ""
 
         with self.lock:
             uid = str(user_id)
@@ -374,8 +355,7 @@ class DatabaseManager:
                 return False, (
                     f"⚠️ <b>FILE SIZE LIMIT EXCEEDED</b>\n\n"
                     f"Your requested torrent size is <b>{sz_str}</b>.\n"
-                    f"Regular users are limited to <b>{max_size_gb} GB</b> per torrent.\n\n"
-                    f"⭐ <i>Upgrade to Premium for unlimited file sizes!</i>"
+                    f"The maximum allowed size is <b>{max_size_gb} GB</b> per torrent."
                 )
 
             daily_limit = int(self.data["settings"].get("daily_limit_regular", 5))
@@ -384,8 +364,7 @@ class DatabaseManager:
                 return False, (
                     f"⚠️ <b>DAILY LIMIT REACHED</b>\n\n"
                     f"You have used all <b>{daily_limit}/{daily_limit}</b> downloads for today.\n"
-                    f"Your quota resets tomorrow at 00:00 UTC.\n\n"
-                    f"⭐ <i>Upgrade to Premium for unlimited daily downloads!</i>"
+                    f"Your quota resets tomorrow at 00:00 UTC."
                 )
 
             return True, ""
@@ -425,7 +404,6 @@ class DatabaseManager:
     def get_stats(self) -> dict:
         with self.lock:
             total_users = len(self.data["users"])
-            premium_users = sum(1 for u in self.data["users"].values() if u.get("is_premium"))
             banned_users = sum(1 for u in self.data["users"].values() if u.get("is_banned"))
             today = self._today_str()
             downloads_today = sum(
@@ -435,7 +413,6 @@ class DatabaseManager:
             )
             return {
                 "total_users": total_users,
-                "premium_users": premium_users,
                 "banned_users": banned_users,
                 "downloads_today": downloads_today,
                 "bot_mode": self.data["settings"].get("bot_mode", "admin_only"),
@@ -446,7 +423,18 @@ class DatabaseManager:
                 "results_channel": self.data["settings"].get("results_channel", ""),
                 "error_channel": self.data["settings"].get("error_channel", ""),
                 "git_token": self.data["settings"].get("git_token", ""),
-                "database_url": self.data["settings"].get("database_url", "")
+                "database_url": self.data["settings"].get("database_url", ""),
+                # Donations
+                "donation_paypal": self.data["settings"].get("donation_paypal", ""),
+                "donation_binance_id": self.data["settings"].get("donation_binance_id", ""),
+                "donation_trc20": self.data["settings"].get("donation_trc20", ""),
+                "donation_bep20": self.data["settings"].get("donation_bep20", ""),
+                "donation_solana": self.data["settings"].get("donation_solana", ""),
+                "donation_ton": self.data["settings"].get("donation_ton", ""),
+                "donation_erc20": self.data["settings"].get("donation_erc20", ""),
+                "donation_arbitrum": self.data["settings"].get("donation_arbitrum", ""),
+                "donation_opbnb": self.data["settings"].get("donation_opbnb", ""),
+                "donation_note": self.data["settings"].get("donation_note", ""),
             }
 
 db = DatabaseManager()
