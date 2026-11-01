@@ -634,12 +634,38 @@ def run_stream_pipeline(session_id: str, destination: str):
                     return
                 last_ui_update[0] = now
 
+                phase = ev.get("phase")
+                speed = ev.get("speed", 0.0)
+                peers = ev.get("peers", 0)
+
+                if phase == "buffering":
+                    buf_bytes = ev.get("bufferedBytes", 0)
+                    piece_len = ev.get("pieceLength", 1) or 1
+                    buf_pct = min(100.0, (buf_bytes / piece_len * 100.0)) if piece_len > 0 else 0.0
+                    text = (
+                        f"{EMOJI_STREAM_DOWN} <b>BUFFERING INITIAL PIECE IN RAM...</b>\n"
+                        f"{SEP}\n"
+                        f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                        f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
+                        f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
+                        f"{SEP}\n"
+                        f"<code>{progress_bar(buf_pct)}</code>\n"
+                        f"{SEP}\n"
+                        f"<blockquote>{EMOJI_PROGRESS} <b>Initial Piece:</b> <code>{human_readable_size(buf_bytes)} / {human_readable_size(piece_len)}</code>\n"
+                        f"{EMOJI_SPEED} <b>Swarm Speed:</b> <code>{human_readable_size(speed)}/s</code>\n"
+                        f"{EMOJI_PEERS} <b>Peers:</b> <code>{peers} connected</code>\n"
+                        f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
+                        f"{SEP}\n"
+                        f"<i>⚡ Preparing live RAM buffer before cloud stream starts...</i>"
+                    )
+                    session["last_rendered_text"] = text
+                    safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id))
+                    return
+
                 transferred = ev.get("transferred", 0)
                 total = ev.get("total", fsize) or fsize
                 pct = (transferred / total * 100.0) if total > 0 else 0.0
-                speed = ev.get("speed", 0.0)
                 eta = ev.get("eta", 0.0)
-                peers = ev.get("peers", 0)
 
                 text = (
                     f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>\n"

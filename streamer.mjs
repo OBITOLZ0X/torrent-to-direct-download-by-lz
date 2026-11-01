@@ -216,6 +216,10 @@ if (getMetadata) {
             return queueMicrotask(() => cb(new Error('Chunk length must be ' + this.chunkLength)));
         }
         this.chunks.set(index, buf);
+        // Throttle swarm download if RAM buffer exceeds 20 pieces
+        if (this.chunks.size > 20 && currentTorrent && !currentTorrent.paused) {
+            currentTorrent.pause();
+        }
         queueMicrotask(() => cb(null));
     };
 
@@ -241,12 +245,16 @@ if (getMetadata) {
         queueMicrotask(() => cb(null, buf));
     };
 
-    SlidingMemoryStore.prototype.cleanPastPieces = function (safePieceIndex, maxAllowedAhead) {
+    SlidingMemoryStore.prototype.cleanPastPieces = function (safePieceIndex) {
         if (this.closed || !this.chunks) return;
         for (const idx of this.chunks.keys()) {
-            if (idx < safePieceIndex || (maxAllowedAhead !== undefined && idx > maxAllowedAhead)) {
+            if (idx < safePieceIndex) {
                 this.chunks.delete(idx);
             }
+        }
+        // Resume swarm download once RAM buffer has drained below 10 pieces
+        if (this.chunks.size < 10 && currentTorrent && currentTorrent.paused) {
+            currentTorrent.resume();
         }
     };
 
@@ -291,7 +299,6 @@ if (getMetadata) {
     client.add(torrentInput, {
         store: SlidingMemoryStore,
         announce: extraTrackers,
-        deselect: true,
         strategy: 'sequential'
     }, async (torrent) => {
         currentTorrent = torrent;
@@ -305,7 +312,14 @@ if (getMetadata) {
             process.exit(1);
         }
 
+        // Deselect other files so WebTorrent concentrates 100% on the selected file
+        for (let i = 0; i < torrent.files.length; i++) {
+            if (i !== fileIndex) {
+                torrent.files[i].deselect();
+            }
+        }
         const file = torrent.files[fileIndex];
+        file.select();
         const totalSize = file.length;
 
         console.log(JSON.stringify({
@@ -335,6 +349,7 @@ if (getMetadata) {
 
                     console.log(JSON.stringify({
                         type: 'progress',
+                        phase: 'transfer',
                         transferred: bytesSentToNetwork,
                         total: totalSize,
                         speed: speed,
@@ -350,29 +365,8 @@ if (getMetadata) {
 
         const uploadStream = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
 
-        const WINDOW_SIZE = 16;
-        let lastSlidPiece = -1;
-
-        function slideWebTorrentWindow(currentPiece) {
-            if (currentPiece === lastSlidPiece) return;
-            lastSlidPiece = currentPiece;
-            const windowAhead = Math.min(file._endPiece, currentPiece + WINDOW_SIZE);
-            if (torrent._selections?._items) {
-                for (const item of torrent._selections._items) {
-                    if (item.isStreamSelection) {
-                        item.from = currentPiece;
-                        item.to = windowAhead;
-                    }
-                }
-                torrent._updateSelections();
-            }
-        }
-
-        function pipeRawStreamIntoUpload(rawStream) {
+        function pipeRawStreamIntoUpload(rawStream, firstChunk) {
             currentRawStream = rawStream;
-
-            // Restrict initial stream selection window
-            slideWebTorrentWindow(file._startPiece);
 
             rawStream.on('error', (err) => {
                 console.error(JSON.stringify({ type: 'error', message: `Torrent transfer error: ${err.message}` }));
@@ -380,21 +374,22 @@ if (getMetadata) {
                 process.exit(1);
             });
 
+            if (firstChunk) {
+                bytesReadFromTorrent += firstChunk.length;
+                uploadStream.write(firstChunk);
+            }
+
             rawStream.on('data', (chunk) => {
                 bytesReadFromTorrent += chunk.length;
                 const pieceLen = torrent.pieceLength || (2 * 1024 * 1024);
                 // Accurate global piece index taking into account file offset in multi-file torrents
                 const currentTorrentPiece = Math.floor((file.offset + bytesReadFromTorrent) / pieceLen);
 
-                // Free memory: keep at most 3 past pieces behind read head, drop anything > 20 pieces ahead
-                const safePiece = Math.max(0, currentTorrentPiece - 3);
-                const maxAhead = currentTorrentPiece + 20;
+                // Free memory: keep at most 4 past pieces behind read head
+                const safePiece = Math.max(0, currentTorrentPiece - 4);
                 if (activeStore) {
-                    activeStore.cleanPastPieces(safePiece, maxAhead);
+                    activeStore.cleanPastPieces(safePiece);
                 }
-
-                // Advance the WebTorrent peer download window
-                slideWebTorrentWindow(currentTorrentPiece);
 
                 const ok = uploadStream.write(chunk);
                 if (!ok) {
@@ -408,12 +403,14 @@ if (getMetadata) {
             rawStream.on('end', () => {
                 uploadStream.end();
             });
+
+            rawStream.resume();
         }
 
         // ─────────────────────────────────────────────
         // Route 1: Gofile.io Upload
         // ─────────────────────────────────────────────
-        if (destination === 'gofile') {
+        async function startGofileUpload(firstChunk, rawStream) {
             const servers = await getGofileServers();
             const serverName = servers[0] || 'store-eu-par-5';
 
@@ -497,15 +494,13 @@ if (getMetadata) {
 
             form.pipe(req);
             startTime = Date.now();
-
-            const rawStream = file.createReadStream();
-            pipeRawStreamIntoUpload(rawStream);
+            pipeRawStreamIntoUpload(rawStream, firstChunk);
         }
 
         // ─────────────────────────────────────────────
         // Route 2: Buzzheavier.com Upload (Default)
         // ─────────────────────────────────────────────
-        else {
+        async function startBuzzheavierUpload(firstChunk, rawStream) {
             const encodedName = encodeURIComponent(file.name);
             const headers = {
                 'Content-Length': totalSize,
@@ -580,10 +575,46 @@ if (getMetadata) {
 
             uploadStream.pipe(networkCounter).pipe(req);
             startTime = Date.now();
-
-            const rawStream = file.createReadStream();
-            pipeRawStreamIntoUpload(rawStream);
+            pipeRawStreamIntoUpload(rawStream, firstChunk);
         }
+
+        // ─────────────────────────────────────────────
+        // Buffer Initial Piece Before Opening HTTP Sockets
+        // ─────────────────────────────────────────────
+        const rawStream = file.createReadStream();
+        currentRawStream = rawStream;
+
+        let firstChunkReceived = false;
+        const bufferingInterval = setInterval(() => {
+            if (firstChunkReceived) {
+                clearInterval(bufferingInterval);
+                return;
+            }
+            console.log(JSON.stringify({
+                type: 'progress',
+                phase: 'buffering',
+                transferred: 0,
+                total: totalSize,
+                bufferedBytes: torrent.downloaded,
+                pieceLength: torrent.pieceLength,
+                speed: torrent.downloadSpeed,
+                eta: 0,
+                peers: torrent.numPeers,
+                isPaused: false
+            }));
+        }, 1500);
+
+        rawStream.once('data', async (firstChunk) => {
+            firstChunkReceived = true;
+            clearInterval(bufferingInterval);
+            rawStream.pause();
+
+            if (destination === 'gofile') {
+                await startGofileUpload(firstChunk, rawStream);
+            } else {
+                await startBuzzheavierUpload(firstChunk, rawStream);
+            }
+        });
     });
 
     // Handle termination
