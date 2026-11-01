@@ -49,7 +49,6 @@ from utils import (
 )
 from torrent_manager import Aria2Manager
 from stream_manager import StreamManager, StreamController
-from cloud_uploader import cloud_uploader
 from database import db
 from github_client import GitHubClient
 
@@ -483,18 +482,9 @@ def build_destination_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     return kb
 
 def build_streaming_keyboard(session_id: str, is_paused: bool = False) -> types.InlineKeyboardMarkup:
-    """Construct keyboard with Pause / Continue and Stop buttons during live streaming."""
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    if is_paused:
-        kb.add(
-            types.InlineKeyboardButton("▶️ Continue", callback_data=f"resume:{session_id}"),
-            types.InlineKeyboardButton("🛑 Stop", callback_data=f"confirm_stop:{session_id}")
-        )
-    else:
-        kb.add(
-            types.InlineKeyboardButton("⏸️ Pause", callback_data=f"pause:{session_id}"),
-            types.InlineKeyboardButton("🛑 Stop", callback_data=f"confirm_stop:{session_id}")
-        )
+    """Construct keyboard with Stop button during live streaming."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("🛑 Stop Stream", callback_data=f"confirm_stop:{session_id}"))
     return kb
 
 def build_stop_confirm_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
@@ -502,7 +492,7 @@ def build_stop_confirm_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("✅ Yes, Stop", callback_data=f"do_stop:{session_id}"),
-        types.InlineKeyboardButton("❌ No, Go Back", callback_data=f"cancel_stop:{session_id}")
+        types.InlineKeyboardButton("❌ No, Continue", callback_data=f"cancel_stop:{session_id}")
     )
     return kb
 
@@ -592,10 +582,9 @@ def render_donation_card() -> str:
 
 def run_stream_pipeline(session_id: str, destination: str):
     """
-    Direct Leech & Cloud Pipeline:
-    1. Downloads torrent file using Aria2 with native pause/resume and connection-loss resilience.
-    2. Uploads downloaded file straight to Buzzheavier or Gofile at maximum speed.
-    3. Immediately purges the file from disk once uploaded to maintain minimal disk footprint.
+    Direct Live Stream Relay:
+    Downloads torrent chunks directly in RAM and concurrently pipes them straight to Buzzheavier or Gofile.
+    Zero bytes are written to the local disk!
     """
     session = sessions.get(session_id)
     if not session:
@@ -616,12 +605,10 @@ def run_stream_pipeline(session_id: str, destination: str):
     total_files = len(files_to_stream)
     uploaded_results = []
 
-    session["is_paused"] = False
     controller = StreamController()
     session["controller"] = controller
     session["current_filename"] = ""
     session["last_rendered_text"] = ""
-    session["current_gid"] = ""
 
     last_ui_update = [0.0]
 
@@ -631,123 +618,13 @@ def run_stream_pipeline(session_id: str, destination: str):
                 break
 
             idx = file_info["index"]
+            zero_idx = idx - 1
             fname = file_info["name"]
             fsize = file_info["length"]
             fsize_str = human_readable_size(fsize)
             session["current_filename"] = fname
-            target_dir = os.path.join(DOWNLOADS_DIR, f"{session_id}_{step_num}")
 
-            # ─────────────────────────────────────────────────────────────
-            # Phase 1: Download from BitTorrent Swarm via Aria2
-            # ─────────────────────────────────────────────────────────────
-            def on_download_progress(ev: dict):
-                now = time.time()
-                if now - last_ui_update[0] < PROGRESS_UPDATE_INTERVAL:
-                    return
-                last_ui_update[0] = now
-
-                completed = ev.get("completed", 0)
-                total = ev.get("total", fsize) or fsize
-                pct = (completed / total * 100.0) if total > 0 else 0.0
-                dl_speed = ev.get("dl_speed", 0)
-                peers = ev.get("connections", 0)
-                seeds = ev.get("seeders", 0)
-                is_p = session.get("is_paused", False) or ev.get("isPaused", False)
-
-                rem = max(0, total - completed)
-                eta = rem / dl_speed if dl_speed > 0 else 0.0
-
-                status_title = "⏸️ <b>DOWNLOAD PAUSED</b>" if is_p else f"{EMOJI_STREAM_DOWN} <b>DOWNLOADING TORRENT...</b>"
-                footer = "<i>⏸️ Download is paused. Tap <b>Continue</b> below to resume.</i>" if is_p else "<i>⚡ Downloading torrent pieces directly...</i>"
-
-                peer_info = f"{seeds} seeds / {peers} peers" if seeds > 0 else f"{peers} connected"
-
-                text = (
-                    f"{status_title}\n"
-                    f"{SEP}\n"
-                    f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                    f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
-                    f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
-                    f"{SEP}\n"
-                    f"<code>{progress_bar(pct)}</code>\n"
-                    f"{SEP}\n"
-                    f"<blockquote>{EMOJI_PROGRESS} <b>Downloaded:</b> <code>{human_readable_size(completed)} / {human_readable_size(total)}</code>\n"
-                    f"{EMOJI_SPEED} <b>Speed:</b> <code>{human_readable_size(dl_speed)}/s</code>\n"
-                    f"{EMOJI_CLOCK} <b>ETA:</b> <code>{format_time(eta)}</code>\n"
-                    f"{EMOJI_PEERS} <b>Peers:</b> <code>{peer_info}</code>\n"
-                    f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
-                    f"{SEP}\n"
-                    f"{footer}"
-                )
-                session["last_rendered_text"] = text
-                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=is_p))
-
-            # Initial message for download phase
-            init_text = (
-                f"{EMOJI_STREAM_DOWN} <b>CONNECTING TO BITTORRENT SWARM...</b>\n"
-                f"{SEP}\n"
-                f"<blockquote>📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
-                f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
-                f"{SEP}\n"
-                f"<i>⚡ Establishing peer connections and starting download...</i>"
-            )
-            session["last_rendered_text"] = init_text
-            safe_edit_message(
-                chat_id,
-                message_id,
-                init_text,
-                reply_markup=build_streaming_keyboard(session_id, is_paused=False),
-            )
-
-            dl_ok, dl_result = aria2.download_single_file(
-                torrent_path=torrent_path,
-                file_index=idx,
-                target_dir=target_dir,
-                progress_callback=on_download_progress,
-                cancel_event=cancel_event,
-                session=session,
-            )
-
-            if cancel_event.is_set():
-                safe_remove(target_dir)
-                break
-
-            if not dl_ok:
-                safe_remove(target_dir)
-                error_msg = str(dl_result)
-                safe_edit_message(
-                    chat_id,
-                    message_id,
-                    f"{EMOJI_ALERT} <b>DOWNLOAD ERROR</b>\n"
-                    f"{SEP}\n"
-                    f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
-                    f"⚠️ <b>Reason:</b> <code>{html.escape(error_msg)}</code></blockquote>\n"
-                    f"{SEP}\n"
-                    f"<i>If the problem persists, please check your network connection or try another host.</i>",
-                    reply_markup=None,
-                )
-                err_channel = db.get_setting("error_channel", "").strip()
-                if err_channel:
-                    try:
-                        err_card = (
-                            f"{EMOJI_ALERT} <b>DOWNLOAD ERROR LOG</b>\n{SEP}\n"
-                            f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
-                            f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
-                            f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:200])}</code>\n"
-                            f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n"
-                            f"{SEP}"
-                        )
-                        bot.send_message(err_channel, err_card)
-                    except Exception as ce:
-                        print(f"[ErrorChannel] Failed to send: {ce}")
-                return
-
-            local_file_path = dl_result
-
-            # ─────────────────────────────────────────────────────────────
-            # Phase 2: Upload to Cloud Host (Buzzheavier / Gofile)
-            # ─────────────────────────────────────────────────────────────
-            def on_upload_progress(ev: dict):
+            def on_stream_progress(ev: dict):
                 now = time.time()
                 if now - last_ui_update[0] < PROGRESS_UPDATE_INTERVAL:
                     return
@@ -758,9 +635,10 @@ def run_stream_pipeline(session_id: str, destination: str):
                 pct = (transferred / total * 100.0) if total > 0 else 0.0
                 speed = ev.get("speed", 0.0)
                 eta = ev.get("eta", 0.0)
+                peers = ev.get("peers", 0)
 
                 text = (
-                    f"{EMOJI_STREAM_UP} <b>UPLOADING TO {dest_display.upper()}...</b>\n"
+                    f"{EMOJI_STREAM_UP} <b>STREAMING IN PROGRESS</b>\n"
                     f"{SEP}\n"
                     f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                     f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
@@ -768,77 +646,95 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"{SEP}\n"
                     f"<code>{progress_bar(pct)}</code>\n"
                     f"{SEP}\n"
-                    f"<blockquote>{EMOJI_PROGRESS} <b>Uploaded:</b> <code>{human_readable_size(transferred)} / {human_readable_size(total)}</code>\n"
+                    f"<blockquote>{EMOJI_PROGRESS} <b>Transferred:</b> <code>{human_readable_size(transferred)} / {human_readable_size(total)}</code>\n"
                     f"{EMOJI_SPEED} <b>Speed:</b> <code>{human_readable_size(speed)}/s</code>\n"
                     f"{EMOJI_CLOCK} <b>ETA:</b> <code>{format_time(eta)}</code>\n"
+                    f"{EMOJI_PEERS} <b>Peers:</b> <code>{peers} connected</code>\n"
                     f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
                     f"{SEP}\n"
-                    f"<i>⚡ Uploading file directly to cloud storage...</i>"
+                    f"<i>⚡ Direct live transfer in progress...</i>"
                 )
                 session["last_rendered_text"] = text
-                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=False))
+                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id))
 
-            up_init_text = (
-                f"{EMOJI_STREAM_UP} <b>STARTING UPLOAD TO {dest_display.upper()}...</b>\n"
+            # Initial message
+            init_text = (
+                f"{EMOJI_STREAM_DOWN} <b>CONNECTING TO BITTORRENT SWARM...</b>\n"
                 f"{SEP}\n"
                 f"<blockquote>📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
                 f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
                 f"{SEP}\n"
-                f"<i>⚡ Connecting to {dest_display} and transferring...</i>"
+                f"<i>⚡ Establishing peer connections and starting stream...</i>"
             )
-            session["last_rendered_text"] = up_init_text
+            session["last_rendered_text"] = init_text
             safe_edit_message(
                 chat_id,
                 message_id,
-                up_init_text,
-                reply_markup=build_streaming_keyboard(session_id, is_paused=False),
+                init_text,
+                reply_markup=build_streaming_keyboard(session_id),
             )
 
-            max_up_retries = 3
-            up_ok = False
-            up_result = None
-            for attempt in range(max_up_retries):
+            # Auto-retry logic (up to 2 retries) if upload connection is dropped by host or timed out
+            max_retries = 2
+            ok = False
+            result = None
+            for attempt in range(max_retries + 1):
                 if cancel_event.is_set():
                     break
-                up_ok, up_result = cloud_uploader.upload_file(
-                    filepath=local_file_path,
+
+                ok, result = stream_mgr.stream_file(
+                    torrent_source=torrent_path,
+                    file_zero_index=zero_idx,
                     destination=destination,
-                    progress_callback=on_upload_progress,
+                    progress_callback=on_stream_progress,
                     cancel_event=cancel_event,
+                    controller=controller,
                 )
-                if up_ok or cancel_event.is_set():
+
+                if ok or cancel_event.is_set():
                     break
 
-                if attempt < max_up_retries - 1 and not cancel_event.is_set():
-                    time.sleep(2)
+                res_str = str(result).lower()
+                is_conn_error = any(kw in res_str for kw in [
+                    "socket hang up", "connection closed", "connection lost",
+                    "disconnected", "timed out", "econnreset", "stalled"
+                ])
 
-            # ─────────────────────────────────────────────────────────────
-            # Phase 3: Immediate Disk Cleanup of Completed File
-            # ─────────────────────────────────────────────────────────────
-            safe_remove(local_file_path)
-            safe_remove(target_dir)
+                if is_conn_error and attempt < max_retries and not cancel_event.is_set():
+                    retry_msg = (
+                        f"🔄 <b>CONNECTION INTERRUPTED</b>\n{SEP}\n"
+                        f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
+                        f"⚠️ <b>Host:</b> {dest_display} connection dropped.\n"
+                        f"🔄 <b>Auto-Retrying:</b> Attempt <code>{attempt + 2} of {max_retries + 1}</code>...</blockquote>\n{SEP}\n"
+                        f"<i>Re-establishing RAM stream pipe and resuming...</i>"
+                    )
+                    safe_edit_message(chat_id, message_id, retry_msg, reply_markup=build_streaming_keyboard(session_id))
+                    time.sleep(3)
+                    continue
+                else:
+                    break
 
             if cancel_event.is_set():
                 break
 
-            if not up_ok:
-                error_msg = str(up_result)
+            if not ok:
+                error_msg = str(result)
                 safe_edit_message(
                     chat_id,
                     message_id,
-                    f"{EMOJI_ALERT} <b>UPLOAD ERROR</b>\n"
+                    f"{EMOJI_ALERT} <b>STREAM ERROR</b>\n"
                     f"{SEP}\n"
                     f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                     f"⚠️ <b>Reason:</b> <code>{html.escape(error_msg)}</code></blockquote>\n"
                     f"{SEP}\n"
-                    f"<i>If the problem persists, please check your network connection or try another host.</i>",
+                    f"<i>If the problem persists, please contact the bot owner.</i>",
                     reply_markup=None,
                 )
                 err_channel = db.get_setting("error_channel", "").strip()
                 if err_channel:
                     try:
                         err_card = (
-                            f"{EMOJI_ALERT} <b>UPLOAD ERROR LOG</b>\n{SEP}\n"
+                            f"{EMOJI_ALERT} <b>STREAM ERROR LOG</b>\n{SEP}\n"
                             f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                             f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
                             f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:200])}</code>\n"
@@ -850,7 +746,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         print(f"[ErrorChannel] Failed to send: {ce}")
                 return
 
-            uploaded_results.append((fname, up_result, fsize_str, fsize))
+            uploaded_results.append((fname, result, fsize_str, fsize))
 
         # Record download usage in database
         if not cancel_event.is_set() and uploaded_results:
@@ -2370,66 +2266,10 @@ def handle_callbacks(call: types.CallbackQuery):
         session["status"] = "running"
         threading.Thread(target=run_stream_pipeline, args=(session_id, destination), daemon=True).start()
 
-    elif action == "pause":
-        session_id = parts[1] if len(parts) > 1 else ""
-        session = sessions.get(session_id)
-        if session:
-            session["is_paused"] = True
-            gid = session.get("current_gid")
-            if gid:
-                aria2.pause_download(gid)
-            ctrl = session.get("controller")
-            if ctrl:
-                ctrl.pause()
-            bot.answer_callback_query(call.id, "⏸️ Download paused.")
-            last_text = session.get("last_rendered_text")
-            if last_text:
-                paused_text = last_text.replace("DOWNLOADING TORRENT...", "DOWNLOAD PAUSED")
-                safe_edit_message(
-                    session["chat_id"],
-                    session["message_id"],
-                    paused_text,
-                    reply_markup=build_streaming_keyboard(session_id, is_paused=True)
-                )
-        else:
-            bot.answer_callback_query(call.id, "Session expired.")
-
-    elif action == "resume":
-        session_id = parts[1] if len(parts) > 1 else ""
-        session = sessions.get(session_id)
-        if session:
-            session["is_paused"] = False
-            gid = session.get("current_gid")
-            if gid:
-                aria2.resume_download(gid)
-            ctrl = session.get("controller")
-            if ctrl:
-                ctrl.resume()
-            bot.answer_callback_query(call.id, "▶️ Resuming download...")
-            last_text = session.get("last_rendered_text")
-            if last_text:
-                resumed_text = last_text.replace("DOWNLOAD PAUSED", "DOWNLOADING TORRENT...")
-                safe_edit_message(
-                    session["chat_id"],
-                    session["message_id"],
-                    resumed_text,
-                    reply_markup=build_streaming_keyboard(session_id, is_paused=False)
-                )
-        else:
-            bot.answer_callback_query(call.id, "Session expired.")
-
     elif action == "confirm_stop":
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
         if session:
-            # Pause during confirmation
-            session["is_paused"] = True
-            gid = session.get("current_gid")
-            if gid:
-                aria2.pause_download(gid)
-            ctrl = session.get("controller")
-            if ctrl:
-                ctrl.pause()
             bot.answer_callback_query(call.id)
             t_name = session.get("torrent_name", "Torrent")
             curr_file = session.get("current_filename", "")
@@ -2438,8 +2278,8 @@ def handle_callbacks(call: types.CallbackQuery):
                 f"🛑 <b>CONFIRM STOP</b>\n{SEP}\n"
                 f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(t_name)}</code>\n"
                 f"{file_line}"
-                f"⚠️ <b>Are you sure you want to stop the download and upload?</b></blockquote>\n{SEP}\n"
-                f"<i>Tap <b>Yes</b> to cancel completely, or <b>No</b> to return to download in paused state.</i>"
+                f"⚠️ <b>Are you sure you want to stop the stream?</b></blockquote>\n{SEP}\n"
+                f"<i>Tap <b>Yes</b> to cancel completely, or <b>No</b> to return to the stream.</i>"
             )
             safe_edit_message(
                 session["chat_id"],
@@ -2454,11 +2294,8 @@ def handle_callbacks(call: types.CallbackQuery):
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
         if session:
-            bot.answer_callback_query(call.id, "🛑 Stopping download...")
+            bot.answer_callback_query(call.id, "🛑 Stopping stream...")
             session["cancel_event"].set()
-            gid = session.get("current_gid")
-            if gid:
-                aria2.stop_download(gid)
             ctrl = session.get("controller")
             if ctrl:
                 ctrl.stop()
@@ -2469,17 +2306,14 @@ def handle_callbacks(call: types.CallbackQuery):
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
         if session:
-            bot.answer_callback_query(call.id, "↩️ Returned. Transfer is paused. (Tap Continue to resume)")
-            # As requested by user: return in paused state, must tap continue to resume
-            session["is_paused"] = True
+            bot.answer_callback_query(call.id, "↩️ Returned to stream.")
             last_text = session.get("last_rendered_text")
             if last_text:
-                paused_text = last_text.replace("DOWNLOADING TORRENT...", "DOWNLOAD PAUSED")
                 safe_edit_message(
                     session["chat_id"],
                     session["message_id"],
-                    paused_text,
-                    reply_markup=build_streaming_keyboard(session_id, is_paused=True)
+                    last_text,
+                    reply_markup=build_streaming_keyboard(session_id)
                 )
             else:
                 safe_edit_message(

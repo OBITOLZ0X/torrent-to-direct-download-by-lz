@@ -202,10 +202,11 @@ if (getMetadata) {
             buf = buf.slice(offset, len + offset);
         }
 
-        // Free older pieces to keep RAM under ~30MB even for 50GB torrents
-        if (index > 4 && this.chunks && this.chunks[index - 4]) {
-            this.chunks[index - 4] = null;
-            delete this.chunks[index - 4];
+        // Free older pieces once comfortably far behind the read stream (64 pieces window)
+        // Keeps RAM low (~64MB) while giving WebTorrent and Cloudflare a massive buffer cushion
+        if (index > 64 && this.chunks && this.chunks[index - 64]) {
+            this.chunks[index - 64] = null;
+            delete this.chunks[index - 64];
         }
 
         queueMicrotask(() => cb(null, buf));
@@ -276,7 +277,7 @@ if (getMetadata) {
 
         const rawStream = file.createReadStream();
         currentRawStream = rawStream;
-        const uploadStream = new PassThrough();
+        const uploadStream = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
 
         let transferred = 0;
         let startTime = Date.now();
@@ -299,7 +300,7 @@ if (getMetadata) {
                     speed: speed,
                     eta: eta,
                     peers: torrent.numPeers,
-                    isPaused: isStreamPaused
+                    isPaused: false
                 }));
             }
         });
@@ -310,8 +311,8 @@ if (getMetadata) {
             process.exit(1);
         });
 
-        // In-RAM Prebuffer: Hold initial chunks up to 4MB (or totalSize if smaller) before opening remote HTTP socket
-        const PREBUFFER_LIMIT = Math.min(totalSize, 4 * 1024 * 1024);
+        // In-RAM Prebuffer: Hold initial chunks up to 8MB (or totalSize if smaller) before opening remote HTTP socket
+        const PREBUFFER_LIMIT = Math.min(totalSize, 8 * 1024 * 1024);
         const prebufferChunks = [];
         let bufferedBytes = 0;
         let uploadStarted = false;
@@ -325,7 +326,7 @@ if (getMetadata) {
                     speed: torrent.downloadSpeed || 0,
                     eta: 0,
                     peers: torrent.numPeers,
-                    isPaused: isStreamPaused
+                    isPaused: false
                 }));
             }
         }, 2000);
@@ -344,11 +345,6 @@ if (getMetadata) {
         }
 
         rawStream.on('data', (chunk) => {
-            if (isStreamPaused) {
-                rawStream.pause();
-                return;
-            }
-
             if (!uploadStarted) {
                 prebufferChunks.push(chunk);
                 bufferedBytes += chunk.length;
@@ -360,9 +356,7 @@ if (getMetadata) {
                 if (!ok) {
                     rawStream.pause();
                     uploadStream.once('drain', () => {
-                        if (!isStreamPaused) {
-                            rawStream.resume();
-                        }
+                        rawStream.resume();
                     });
                 }
             }
@@ -397,14 +391,17 @@ if (getMetadata) {
             });
 
             const headers = form.getHeaders();
+            headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+            headers['Accept'] = '*/*';
+            headers['Connection'] = 'keep-alive';
             if (formLength) {
                 headers['Content-Length'] = formLength;
             }
 
-            // Connection agent without hard 5-minute timeout
+            // Connection agent with 30s keepAlive
             const agent = new https.Agent({
                 keepAlive: true,
-                keepAliveMsecs: 15000
+                keepAliveMsecs: 30000
             });
 
             const req = https.request({
@@ -443,21 +440,18 @@ if (getMetadata) {
                 });
             });
 
-            // Dynamic inactivity timer: only triggers if ZERO data received or sent for 120s while NOT paused
+            // Dynamic inactivity timer: triggers if ZERO data transferred for 300 seconds
             let inactivityTimer = null;
             function resetGofileInactivity() {
                 if (inactivityTimer) clearTimeout(inactivityTimer);
                 inactivityTimer = setTimeout(() => {
-                    if (!isStreamPaused) {
-                        console.error(JSON.stringify({
-                            type: 'error',
-                            isConnectionClosed: true,
-                            wasPaused: false,
-                            message: 'Gofile upload connection stalled: No data transferred for 120 seconds.'
-                        }));
-                        req.destroy();
-                    }
-                }, 120000);
+                    console.error(JSON.stringify({
+                        type: 'error',
+                        isConnectionClosed: true,
+                        message: 'Gofile upload connection stalled: No data transferred for 300 seconds.'
+                    }));
+                    req.destroy();
+                }, 300000);
             }
             resetGofileInactivity();
 
@@ -473,11 +467,8 @@ if (getMetadata) {
                     type: 'error',
                     code: err.code || 'REQUEST_ERROR',
                     isConnectionClosed: isConnClosed,
-                    wasPaused: isStreamPaused,
                     message: isConnClosed
-                        ? (isStreamPaused
-                            ? 'Connection closed by Gofile while paused.'
-                            : `Gofile upload connection lost: ${err.message}`)
+                        ? `Gofile upload connection lost: ${err.message}`
                         : `Gofile request error: ${err.message}`
                 }));
                 client.destroy();
@@ -503,16 +494,19 @@ if (getMetadata) {
         async function startBuzzheavierUpload() {
             const encodedName = encodeURIComponent(file.name);
             const headers = {
-                'Content-Length': totalSize
+                'Content-Length': totalSize,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+                'Connection': 'keep-alive',
             };
             if (accountId) {
                 headers['Authorization'] = `Bearer ${accountId}`;
             }
 
-            // Connection agent without hard 5-minute timeout
+            // Connection agent with 30s keepAlive
             const agent = new https.Agent({
                 keepAlive: true,
-                keepAliveMsecs: 15000
+                keepAliveMsecs: 30000
             });
 
             const req = https.request({
@@ -555,21 +549,18 @@ if (getMetadata) {
                 });
             });
 
-            // Dynamic inactivity timer: only triggers if ZERO data received or sent for 120s while NOT paused
+            // Dynamic inactivity timer: triggers if ZERO data transferred for 300 seconds
             let inactivityTimer = null;
             function resetBuzzInactivity() {
                 if (inactivityTimer) clearTimeout(inactivityTimer);
                 inactivityTimer = setTimeout(() => {
-                    if (!isStreamPaused) {
-                        console.error(JSON.stringify({
-                            type: 'error',
-                            isConnectionClosed: true,
-                            wasPaused: false,
-                            message: 'Buzzheavier upload connection stalled: No data transferred for 120 seconds.'
-                        }));
-                        req.destroy();
-                    }
-                }, 120000);
+                    console.error(JSON.stringify({
+                        type: 'error',
+                        isConnectionClosed: true,
+                        message: 'Buzzheavier upload connection stalled: No data transferred for 300 seconds.'
+                    }));
+                    req.destroy();
+                }, 300000);
             }
             resetBuzzInactivity();
 
@@ -585,11 +576,8 @@ if (getMetadata) {
                     type: 'error',
                     code: err.code || 'REQUEST_ERROR',
                     isConnectionClosed: isConnClosed,
-                    wasPaused: isStreamPaused,
                     message: isConnClosed
-                        ? (isStreamPaused
-                            ? 'Connection closed by Buzzheavier while paused.'
-                            : `Buzzheavier upload connection lost: ${err.message}`)
+                        ? `Buzzheavier upload connection lost: ${err.message}`
                         : `Buzzheavier request error: ${err.message}`
                 }));
                 client.destroy();

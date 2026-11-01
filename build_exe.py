@@ -74,8 +74,6 @@ def build():
         "--hidden-import",
         "github_client",
         "--hidden-import",
-        "cloud_uploader",
-        "--hidden-import",
         "torrentool",
         "bot.py",
     ])
