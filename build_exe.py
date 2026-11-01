@@ -53,6 +53,14 @@ def build():
         f"aria2c.exe{os.pathsep}.",
         "--add-data",
         f"node_modules.zip{os.pathsep}.",
+    ]
+
+    node_exe = shutil.which("node") or shutil.which("node.exe") or r"C:\Program Files\nodejs\node.exe"
+    if node_exe and os.path.exists(node_exe):
+        print(f"[*] Bundling standalone Node.js runtime from: {node_exe}")
+        cmd.extend(["--add-data", f"{node_exe}{os.pathsep}."])
+
+    cmd.extend([
         "--hidden-import",
         "telebot",
         "--hidden-import",
@@ -62,7 +70,7 @@ def build():
         "--hidden-import",
         "torrentool",
         "bot.py",
-    ]
+    ])
 
     print("[*] Running PyInstaller command:")
     print(" ".join(cmd))
