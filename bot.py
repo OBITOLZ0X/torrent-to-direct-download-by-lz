@@ -792,7 +792,17 @@ def render_github_menu() -> tuple[str, types.InlineKeyboardMarkup]:
         else:
             tok_status = "🔴 Invalid"
 
-    db_status = "🟢 Connected & Syncing" if (token and tok_status == "🟢 Valid") else "🔴 Offline / Not Configured"
+    if token and tok_status == "🟢 Valid":
+        sync_state = "🟡 Changes Pending (syncing in ≤2m)" if db.has_pending_changes() else "🟢 All Synced"
+        last_sync = db.get_last_sync_display()
+        db_status = (
+            f"🟢 <b>Connected (Local-First Engine)</b>\n"
+            f"<blockquote>⏱️ <b>Auto-Sync:</b> Every 2 minutes\n"
+            f"⏳ <b>Pending Changes:</b> {sync_state}\n"
+            f"🕒 <b>Last Cloud Sync:</b> {last_sync}</blockquote>"
+        )
+    else:
+        db_status = "🔴 Offline / Not Configured"
 
     text = (
         f"🐙 <b>GITHUB DATABASE CONFIGURATION</b>\n{SEP}\n"
@@ -802,11 +812,15 @@ def render_github_menu() -> tuple[str, types.InlineKeyboardMarkup]:
         f"<blockquote>📊 <b>Status:</b> {db_status}</blockquote>\n"
         f"<blockquote>🔗 <b>Raw URL:</b>\n<code>{db_url}</code></blockquote>\n"
         f"{SEP}\n"
-        f"<i>Manage cloud storage and credentials:</i>"
+        f"<i>⚡ All actions run locally with 0ms delay and sync to GitHub every 2 minutes.</i>"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     if token:
+        kb.add(
+            types.InlineKeyboardButton("🔄 Sync to GitHub Now", callback_data="cfg_gh_sync_now"),
+            types.InlineKeyboardButton("📥 Pull from GitHub", callback_data="cfg_gh_refresh")
+        )
         kb.add(
             types.InlineKeyboardButton("🔄 Update Token", callback_data="cfg_gh_update_token"),
             types.InlineKeyboardButton("🧪 Test Token", callback_data="cfg_gh_test_token")
@@ -817,9 +831,8 @@ def render_github_menu() -> tuple[str, types.InlineKeyboardMarkup]:
 
     kb.add(
         types.InlineKeyboardButton("✏️ Edit Database URL", callback_data="cfg_gh_edit_url"),
-        types.InlineKeyboardButton("🔄 Refresh / Sync DB", callback_data="cfg_gh_refresh")
+        types.InlineKeyboardButton("🧪 Test Connection", callback_data="cfg_gh_test_db")
     )
-    kb.add(types.InlineKeyboardButton("🧪 Test Database Connection", callback_data="cfg_gh_test_db"))
     kb.add(types.InlineKeyboardButton("🗑️ Reset Remote DB", callback_data="cfg_gh_reset_db"))
     kb.add(types.InlineKeyboardButton("❓ Help & Token Guide", callback_data="cfg_gh_help"))
     kb.add(types.InlineKeyboardButton("← Back to Settings", callback_data="cfg_main"))
@@ -1765,6 +1778,20 @@ def handle_callbacks(call: types.CallbackQuery):
                 return_menu="github"
             )
             bot.answer_callback_query(call.id)
+            return
+
+        elif data == "cfg_gh_sync_now":
+            if not db.is_github_connected():
+                bot.answer_callback_query(call.id, "❌ GitHub is not connected!", show_alert=True)
+                return
+            bot.answer_callback_query(call.id, "🔄 Syncing database to GitHub...")
+            ok, msg = db.sync_to_github_now(commit_msg="Manual sync via Admin Panel")
+            if ok:
+                bot.answer_callback_query(call.id, "✅ Database synced to GitHub successfully!", show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, f"⚠️ Sync failed: {msg}", show_alert=True)
+            text, kb = render_github_menu()
+            safe_edit_message(cid, mid, text, reply_markup=kb)
             return
 
         elif data == "cfg_gh_refresh":

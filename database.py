@@ -6,6 +6,7 @@ No premium tier; standard limits apply to all registered members.
 
 import os
 import json
+import time
 import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
@@ -22,9 +23,18 @@ class DatabaseManager:
     def __init__(self, cache_path: str = CACHE_FILE):
         self.cache_path = cache_path
         self.lock = threading.RLock()
+        self._sync_lock = threading.Lock()
         self.data = self._load_cache()
         self._github_client: Optional[GitHubClient] = None
+        self._has_pending_changes: bool = False
+        self._sync_interval: int = 120  # Automatic cloud sync every 2 minutes (120s)
+        self._last_sync_time: float = 0.0
+        self._last_sync_status: str = "Idle"
+        self._stop_sync = threading.Event()
+        self._sync_thread: Optional[threading.Thread] = None
+
         self._init_github()
+        self._start_sync_thread()
 
     def _get_default_structure(self) -> dict:
         return {
@@ -85,7 +95,52 @@ class DatabaseManager:
         token = self.data["settings"].get("git_token", "").strip()
         if token:
             self._github_client = GitHubClient(token)
-            threading.Thread(target=self.sync_from_github, daemon=True).start()
+            # Startup background pull: download existing remote DB into local cache
+            threading.Thread(target=self._startup_sync_from_github, daemon=True, name="GitHubStartupSync").start()
+
+    def _startup_sync_from_github(self):
+        """Startup worker to download remote database without stalling startup."""
+        try:
+            print("[Database] Initializing connection to GitHub cloud database...")
+            if self.sync_from_github():
+                print(f"[Database] Successfully loaded database from GitHub ({len(self.data.get('users', {}))} users).")
+            else:
+                print("[Database] GitHub database could not be loaded or is empty; using local cache.")
+        except Exception as e:
+            print(f"[Database] Startup sync warning: {e}")
+
+    def _start_sync_thread(self):
+        """Background daemon thread that auto-syncs local changes to GitHub every 2 minutes (120 seconds)."""
+        if self._sync_thread and self._sync_thread.is_alive():
+            return
+
+        def _worker():
+            while not self._stop_sync.is_set():
+                # Sleep in 1-second ticks so shutdown or interruptions are responsive
+                for _ in range(self._sync_interval):
+                    if self._stop_sync.is_set():
+                        break
+                    time.sleep(1)
+
+                if self._stop_sync.is_set():
+                    break
+
+                # Every 2 minutes (120s), check if there are pending local changes
+                try:
+                    if self.is_github_connected() and self._has_pending_changes:
+                        print("[Database] 2-minute auto-sync timer: pushing pending local changes to GitHub...")
+                        ok, msg = self.sync_to_github_now(
+                            commit_msg=f"Auto-sync database - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                        )
+                        if ok:
+                            print(f"[Database] Auto-sync to GitHub completed successfully ({len(self.data.get('users', {}))} users).")
+                        else:
+                            print(f"[Database] Auto-sync to GitHub failed: {msg}")
+                except Exception as ex:
+                    print(f"[Database] Auto-sync worker exception: {ex}")
+
+        self._sync_thread = threading.Thread(target=_worker, daemon=True, name="GitHubAutoSyncThread")
+        self._sync_thread.start()
 
     def _today_str(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -97,67 +152,117 @@ class DatabaseManager:
         token = self.data["settings"].get("git_token", "").strip()
         if not token:
             return False
-        if not self._github_client:
+        if not self._github_client or self._github_client.token != token:
             self._github_client = GitHubClient(token)
         return self._github_client.test_token()
 
+    def has_pending_changes(self) -> bool:
+        with self.lock:
+            return self._has_pending_changes
+
+    def get_last_sync_time(self) -> float:
+        with self.lock:
+            return self._last_sync_time
+
+    def get_last_sync_display(self) -> str:
+        with self.lock:
+            if not self._last_sync_time:
+                return "Never"
+            elapsed = int(time.time() - self._last_sync_time)
+            if elapsed < 60:
+                return f"{elapsed}s ago"
+            mins = elapsed // 60
+            return f"{mins}m {elapsed % 60}s ago"
+
     def sync_from_github(self) -> bool:
         """Fetch remote database and merge with in-memory data."""
-        with self.lock:
-            url = self.data["settings"].get("database_url", "").strip()
-            token = self.data["settings"].get("git_token", "").strip()
-            if not token or not url:
-                return False
+        url = self.data["settings"].get("database_url", "").strip()
+        token = self.data["settings"].get("git_token", "").strip()
+        if not token or not url:
+            return False
 
+        try:
             client = GitHubClient(token)
             remote = client.read_file(url, as_json=True)
             if remote and isinstance(remote, dict):
                 remote_settings = remote.get("settings", {})
                 remote_users = remote.get("users", {})
 
-                # Merge settings
-                for k, v in remote_settings.items():
-                    if k != "git_token" or v:
-                        self.data["settings"][k] = v
+                with self.lock:
+                    # Merge settings
+                    for k, v in remote_settings.items():
+                        if k != "git_token" or v:
+                            self.data["settings"][k] = v
 
-                # Merge users
-                for uid, uinfo in remote_users.items():
-                    if uid not in self.data["users"]:
-                        self.data["users"][uid] = uinfo
-                    else:
-                        local_u = self.data["users"][uid]
-                        if local_u.get("today_date") == uinfo.get("today_date"):
-                            local_u["downloads_today"] = max(local_u.get("downloads_today", 0), uinfo.get("downloads_today", 0))
-                        local_u["is_banned"] = uinfo.get("is_banned", local_u.get("is_banned", False))
+                    # Merge users
+                    for uid, uinfo in remote_users.items():
+                        if uid not in self.data["users"]:
+                            self.data["users"][uid] = uinfo
+                        else:
+                            local_u = self.data["users"][uid]
+                            if local_u.get("today_date") == uinfo.get("today_date"):
+                                local_u["downloads_today"] = max(local_u.get("downloads_today", 0), uinfo.get("downloads_today", 0))
+                            local_u["is_banned"] = uinfo.get("is_banned", local_u.get("is_banned", False))
+                            local_u["total_downloads"] = max(local_u.get("total_downloads", 0), uinfo.get("total_downloads", 0))
 
-                self._save_cache()
+                    self._has_pending_changes = False
+                    self._last_sync_time = time.time()
+                    self._last_sync_status = "Success (pulled from cloud)"
+                    self._save_cache()
                 return True
-            return False
+        except Exception as e:
+            print(f"[!] sync_from_github error: {e}")
+        return False
 
-    def sync_to_github(self, async_call: bool = True):
-        """Push current memory database to GitHub cloud."""
-        self._save_cache()
-        url = self.data["settings"].get("database_url", "").strip()
+    def sync_to_github_now(self, commit_msg: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Immediately push current memory database to GitHub cloud.
+        Thread-safe and protected by _sync_lock.
+        """
         token = self.data["settings"].get("git_token", "").strip()
-        if not token or not url:
-            return
+        url = self.data["settings"].get("database_url", "").strip()
+        if not token:
+            return False, "No GitHub token configured."
+        if not url:
+            return False, "No database URL configured."
 
-        def _worker():
+        with self._sync_lock:
+            with self.lock:
+                self._save_cache()
+                payload = json.loads(json.dumps(self.data))
+
             try:
                 client = GitHubClient(token)
-                with self.lock:
-                    payload = dict(self.data)
-                client.write_file(url, payload, commit_msg=f"Database update - {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+                msg = commit_msg or f"Update database - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                ok = client.write_file(url, payload, commit_msg=msg)
+                if ok:
+                    with self.lock:
+                        self._has_pending_changes = False
+                        self._last_sync_time = time.time()
+                        self._last_sync_status = "Success"
+                    return True, "Cloud database synchronized successfully."
+                else:
+                    with self.lock:
+                        self._last_sync_status = "Failed to write file"
+                    return False, "Failed to write database to GitHub. Please check repository permissions."
             except Exception as e:
-                print(f"[!] GitHub sync error: {e}")
+                with self.lock:
+                    self._last_sync_status = f"Error: {e}"
+                return False, f"GitHub sync error: {e}"
 
+    def sync_to_github(self, async_call: bool = True):
+        """Backward-compatible helper. Schedules or executes immediate sync."""
         if async_call:
-            threading.Thread(target=_worker, daemon=True).start()
+            threading.Thread(target=self.sync_to_github_now, daemon=True).start()
         else:
-            _worker()
+            self.sync_to_github_now()
 
     def set_github_token(self, token: str) -> Tuple[bool, str]:
-        """Validate and configure GitHub token, automatically provisioning database repo."""
+        """
+        Validate and configure GitHub token.
+        Downloads the existing database from GitHub first (Local-First architecture),
+        then starts the 2-minute periodic auto-sync.
+        """
         token = token.strip()
         client = GitHubClient(token)
         if not client.test_token():
@@ -176,13 +281,31 @@ class DatabaseManager:
                 )
                 if ok:
                     self.data["settings"]["database_url"] = res_url
+                    current_url = res_url
                 else:
                     info = client.get_token_info()
                     uname = info.get("username", "user")
-                    self.data["settings"]["database_url"] = f"https://raw.githubusercontent.com/{uname}/torrent-stream-db/main/database.json"
+                    current_url = f"https://raw.githubusercontent.com/{uname}/torrent-stream-db/main/database.json"
+                    self.data["settings"]["database_url"] = current_url
 
-            self.sync_to_github(async_call=False)
-            return True, "Token configured and database synced successfully!"
+            self._save_cache()
+
+        # Step 1: Immediately download/load existing database from GitHub!
+        downloaded = self.sync_from_github()
+        with self.lock:
+            self._has_pending_changes = False
+            self._last_sync_time = time.time()
+            self._last_sync_status = "Initial sync"
+            users_count = len(self.data.get("users", {}))
+
+        # Step 2: Ensure the 2-minute sync thread is running
+        self._start_sync_thread()
+
+        if downloaded:
+            return True, f"GitHub connected! Downloaded database from GitHub ({users_count} users loaded). Local-first mode active with auto-sync every 2 minutes."
+        else:
+            self.sync_to_github_now(commit_msg="Initialize database.json")
+            return True, "GitHub connected! Initialized remote database. Local-first mode active with auto-sync every 2 minutes."
 
     def remove_github_token(self) -> bool:
         """Remove GitHub token and revert to admin_only mode."""
@@ -190,6 +313,7 @@ class DatabaseManager:
             self.data["settings"]["git_token"] = ""
             self.data["settings"]["bot_mode"] = "admin_only"
             self._github_client = None
+            self._has_pending_changes = False
             self._save_cache()
             return True
 
@@ -201,7 +325,7 @@ class DatabaseManager:
             self._save_cache()
             if self.is_github_connected():
                 self.sync_from_github()
-                self.sync_to_github(async_call=True)
+                self._has_pending_changes = False
             return True, f"Database URL updated to: {url}"
 
     # ════════════════ Bot Mode Management (Gatekeeper Constraint) ════════════════
@@ -225,7 +349,8 @@ class DatabaseManager:
                     )
 
             self.data["settings"]["bot_mode"] = mode
-            self.sync_to_github(async_call=True)
+            self._has_pending_changes = True
+            self._save_cache()
             return True, f"Bot mode switched to <b>{mode.upper()}</b>."
 
     # ════════════════ User Queries & Quotas ════════════════
@@ -247,7 +372,8 @@ class DatabaseManager:
                     "downloads_today": 0,
                     "total_downloads": 0
                 }
-                self.sync_to_github(async_call=True)
+                self._has_pending_changes = True
+                self._save_cache()
                 return True
             return False
 
@@ -262,7 +388,8 @@ class DatabaseManager:
             if uid not in self.data["users"]:
                 self.register_user(user_id)
             self.data["users"][uid]["is_banned"] = status
-            self.sync_to_github(async_call=True)
+            self._has_pending_changes = True
+            self._save_cache()
             return True
 
     def reset_user_daily_limit(self, user_id: int) -> bool:
@@ -272,7 +399,8 @@ class DatabaseManager:
             if u:
                 u["downloads_today"] = 0
                 u["today_date"] = self._today_str()
-                self.sync_to_github(async_call=True)
+                self._has_pending_changes = True
+                self._save_cache()
                 return True
             return False
 
@@ -380,7 +508,8 @@ class DatabaseManager:
                     user["downloads_today"] = 0
                 user["downloads_today"] = user.get("downloads_today", 0) + 1
                 user["total_downloads"] = user.get("total_downloads", 0) + 1
-                self.sync_to_github(async_call=True)
+                self._has_pending_changes = True
+                self._save_cache()
 
     # ════════════════ Settings Management ════════════════
 
@@ -391,14 +520,16 @@ class DatabaseManager:
     def set_setting(self, key: str, value) -> bool:
         with self.lock:
             self.data["settings"][key] = value
-            self.sync_to_github(async_call=True)
+            self._has_pending_changes = True
+            self._save_cache()
             return True
 
     def reset_database(self) -> bool:
         """Reset user database while preserving settings."""
         with self.lock:
             self.data["users"] = {}
-            self.sync_to_github(async_call=True)
+            self._has_pending_changes = True
+            self._save_cache()
             return True
 
     def get_stats(self) -> dict:
