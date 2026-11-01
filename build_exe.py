@@ -29,11 +29,13 @@ def build():
     ]
 
     # Re-evaluate: Since the bot prompts for token & admin ID on first run, it MUST have console!
-    # Ensure node_modules.zip exists
+    # Ensure node_modules.zip exists and is up to date
     zip_path = os.path.join(BASE_DIR, "node_modules.zip")
     node_modules_dir = os.path.join(BASE_DIR, "node_modules")
-    if not os.path.exists(zip_path) and os.path.exists(node_modules_dir):
-        print("[*] Creating node_modules.zip for standalone embedding...")
+    if os.path.exists(node_modules_dir):
+        print("[*] Refreshing node_modules.zip for standalone embedding...")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
         shutil.make_archive(os.path.join(BASE_DIR, "node_modules"), "zip", node_modules_dir)
 
     cmd = [

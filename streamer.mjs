@@ -6,6 +6,24 @@ import process from 'process';
 import readline from 'readline';
 import { PassThrough, Transform } from 'stream';
 
+// Global error protection to gracefully absorb benign WebTorrent internal swarm/peer race conditions
+process.on('uncaughtException', (err) => {
+    const msg = err?.message || String(err);
+    if (
+        msg.includes("Cannot read properties of null (reading 'private')") ||
+        msg.includes("reading 'dht'") ||
+        msg.includes('unexpected crypto handshake') ||
+        msg.includes('unexpected handshake info hash') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('EPIPE') ||
+        msg.includes('ETIMEDOUT')
+    ) {
+        return;
+    }
+    console.error(JSON.stringify({ type: 'error', message: `Streamer process error: ${msg}` }));
+    process.exit(1);
+});
+
 // Parse CLI arguments
 const args = process.argv.slice(2);
 let source = '';
