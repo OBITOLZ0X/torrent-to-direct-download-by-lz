@@ -264,6 +264,36 @@ class Aria2Manager:
 
         return name, total_size, file_list
 
+    def pause_download(self, gid: str) -> bool:
+        """Pause an active aria2 download."""
+        try:
+            self.call_rpc("aria2.pause", [gid])
+            return True
+        except Exception as e:
+            print(f"[Aria2Manager] Error pausing gid {gid}: {e}")
+            return False
+
+    def resume_download(self, gid: str) -> bool:
+        """Resume a paused aria2 download."""
+        try:
+            self.call_rpc("aria2.unpause", [gid])
+            return True
+        except Exception as e:
+            print(f"[Aria2Manager] Error resuming gid {gid}: {e}")
+            return False
+
+    def stop_download(self, gid: str) -> bool:
+        """Force-stop and remove an aria2 download."""
+        try:
+            self.call_rpc("aria2.forceRemove", [gid])
+        except Exception:
+            pass
+        try:
+            self.call_rpc("aria2.removeDownloadResult", [gid])
+        except Exception:
+            pass
+        return True
+
     def download_single_file(
         self,
         torrent_path: str,
@@ -271,9 +301,11 @@ class Aria2Manager:
         target_dir: str,
         progress_callback=None,
         cancel_event=None,
+        session: dict = None,
     ) -> tuple[bool, str]:
         """
-        Download only one specific file from the torrent.
+        Download only one specific file from the torrent using Aria2.
+        Supports seamless pause/resume and connection-loss resilience.
         Returns:
             (True, downloaded_file_path) or (False, error_reason)
         """
@@ -286,11 +318,20 @@ class Aria2Manager:
             "dir": target_dir,
             "seed-time": "0",
             "file-allocation": "none",
-            "bt-tracker-connect-timeout": "5",
+            "bt-tracker-connect-timeout": "10",
+            "bt-tracker-timeout": "15",
+            "bt-max-peers": "120",
+            "bt-tracker": ",".join(DEFAULT_TRACKERS),
+            "enable-dht": "true",
+            "enable-peer-exchange": "true",
+            "bt-enable-lpd": "true",
+            "max-connection-per-server": "16",
         }
 
         try:
             gid = self.call_rpc("aria2.addTorrent", [b64_torrent, [], options])
+            if session is not None:
+                session["current_gid"] = gid
         except Exception as e:
             return False, f"Failed to start aria2 download: {e}"
 
@@ -298,11 +339,7 @@ class Aria2Manager:
 
         while True:
             if cancel_event and cancel_event.is_set():
-                try:
-                    self.call_rpc("aria2.forceRemove", [gid])
-                    self.call_rpc("aria2.removeDownloadResult", [gid])
-                except Exception:
-                    pass
+                self.stop_download(gid)
                 safe_remove(target_dir)
                 return False, "Download cancelled by user."
 
@@ -310,7 +347,9 @@ class Aria2Manager:
             try:
                 status = self.call_rpc("aria2.tellStatus", [gid])
             except Exception as e:
-                return False, f"Lost connection to aria2: {e}"
+                # If RPC blips momentarily, retry next loop without aborting
+                time.sleep(1)
+                continue
 
             st = status.get("status")
             if st == "complete":
@@ -353,22 +392,33 @@ class Aria2Manager:
                 safe_remove(target_dir)
                 return False, err
 
-            elif st == "active":
-                completed = int(status.get("completedLength", 0))
-                total = int(status.get("totalLength", 0))
+            elif st in ("active", "paused", "waiting"):
+                files = status.get("files", [])
+                target_file_obj = next((f for f in files if f.get("index") == str(file_index)), None)
+
+                if target_file_obj:
+                    completed = int(target_file_obj.get("completedLength", 0))
+                    total = int(target_file_obj.get("length", 0))
+                else:
+                    completed = int(status.get("completedLength", 0))
+                    total = int(status.get("totalLength", 0))
+
                 dl_speed = int(status.get("downloadSpeed", 0))
                 ul_speed = int(status.get("uploadSpeed", 0))
                 seeders = int(status.get("numSeeders", 0))
                 connections = int(status.get("connections", 0))
+                is_p = (st == "paused") or (session and session.get("is_paused", False))
 
                 now = time.time()
                 if progress_callback and (now - last_update >= 1.5):
                     last_update = now
                     progress_callback({
+                        "stage": "downloading",
                         "completed": completed,
                         "total": total,
                         "dl_speed": dl_speed,
                         "ul_speed": ul_speed,
                         "seeders": seeders,
                         "connections": connections,
+                        "isPaused": is_p,
                     })
