@@ -83,9 +83,90 @@ GITHUB_HELP_TEXT = (
     f"💡 <i>The bot will automatically create a private repository and keep database.json synced for free!</i>"
 )
 
-# Initialize Telegram bot and managers with crash protection
+# Initialize Telegram bot and managers with crash protection & resilient network adapters
 try:
+    import logging
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    from telebot import apihelper
+
+    # Suppress noisy telebot disconnect tracebacks in terminal
+    telebot.logger.setLevel(logging.CRITICAL)
+
+    # Configure resilient HTTP session with automatic retries for Telegram API
+    retry_strategy = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=25, pool_maxsize=25)
+    telegram_session = requests.Session()
+    telegram_session.mount("https://", adapter)
+    telegram_session.mount("http://", adapter)
+    apihelper.session = telegram_session
+    apihelper.SESSION_TIME_TO_LIVE = 60  # Recycle idle sockets before WinError 10054 drops them
+    apihelper.RETRY_ON_ERROR = True
+
     bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+
+    # Resilient wrapper for answer_callback_query against WinError 10054
+    _orig_answer_callback = bot.answer_callback_query
+    def _safe_answer_callback_wrapper(*args, **kwargs):
+        for _att in range(2):
+            try:
+                return _orig_answer_callback(*args, **kwargs)
+            except ApiTelegramException as _api_err:
+                if "query is too old" in str(_api_err).lower() or "query_id_invalid" in str(_api_err).lower():
+                    return False
+                break
+            except Exception:
+                if _att == 0:
+                    time.sleep(0.3)
+                else:
+                    return False
+    bot.answer_callback_query = _safe_answer_callback_wrapper
+
+    # Resilient wrapper for reply_to against WinError 10054
+    _orig_reply_to = bot.reply_to
+    def _safe_reply_to_wrapper(*args, **kwargs):
+        for _att in range(3):
+            try:
+                return _orig_reply_to(*args, **kwargs)
+            except ApiTelegramException as _api_err:
+                if "flood" in str(_api_err).lower():
+                    time.sleep(2)
+                else:
+                    raise
+            except Exception:
+                if _att < 2:
+                    time.sleep(0.5)
+                else:
+                    raise
+    bot.reply_to = _safe_reply_to_wrapper
+
+    # Resilient wrapper for send_message against WinError 10054
+    _orig_send_message = bot.send_message
+    def _safe_send_message_wrapper(*args, **kwargs):
+        for _att in range(3):
+            try:
+                return _orig_send_message(*args, **kwargs)
+            except ApiTelegramException as _api_err:
+                if "flood" in str(_api_err).lower():
+                    time.sleep(2)
+                else:
+                    raise
+            except Exception:
+                if _att < 2:
+                    time.sleep(0.5)
+                else:
+                    raise
+    bot.send_message = _safe_send_message_wrapper
+
     aria2 = Aria2Manager()
     stream_mgr = StreamManager()
 except Exception as init_err:
@@ -164,40 +245,50 @@ def get_admin_username() -> str:
     return _admin_username_cache
 
 def safe_edit_message(chat_id: int, message_id: int, text: str, reply_markup=None):
-    """Safely edit message text handling rate limits and unmodified text."""
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    except ApiTelegramException as e:
-        if "message is not modified" in str(e).lower():
-            pass
-        elif "flood" in str(e).lower() or "too many requests" in str(e).lower():
-            time.sleep(2)
-        else:
-            print(f"[safe_edit_message] Telegram API error: {e}")
-    except Exception as e:
-        print(f"[safe_edit_message] Error: {e}")
+    """Safely edit message text handling rate limits, unmodified text, and network glitches."""
+    for attempt in range(3):
+        try:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return
+        except ApiTelegramException as e:
+            if "message is not modified" in str(e).lower():
+                return
+            elif "flood" in str(e).lower() or "too many requests" in str(e).lower():
+                time.sleep(2)
+            else:
+                return
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.4)
+            else:
+                pass
 
 def safe_edit_markup(chat_id: int, message_id: int, reply_markup):
-    """Safely edit reply markup."""
-    try:
-        bot.edit_message_reply_markup(
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=reply_markup,
-        )
-    except ApiTelegramException as e:
-        if "message is not modified" in str(e).lower():
-            pass
-        else:
-            print(f"[safe_edit_markup] Telegram API error: {e}")
-    except Exception as e:
-        print(f"[safe_edit_markup] Error: {e}")
+    """Safely edit reply markup handling transient connection glitches."""
+    for attempt in range(2):
+        try:
+            bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=reply_markup,
+            )
+            return
+        except ApiTelegramException as e:
+            if "message is not modified" in str(e).lower():
+                return
+            elif "flood" in str(e).lower() or "too many requests" in str(e).lower():
+                time.sleep(2)
+            else:
+                return
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.3)
 
 def cleanup_torrent_file(filepath: Optional[str]):
     """Clean up downloaded .torrent metadata files immediately."""
@@ -2371,15 +2462,29 @@ def main():
     restart_count = 0
     while True:
         try:
-            bot.infinity_polling(timeout=25, long_polling_timeout=20)
+            bot.infinity_polling(
+                timeout=25,
+                long_polling_timeout=20,
+                logger_level=logging.CRITICAL,
+                none_stop=True,
+                restart_on_change=False,
+            )
         except (KeyboardInterrupt, SystemExit):
             print(f"\n{YELLOW}[!] Bot stopping on user request...{RESET}")
             break
+        except (ConnectionResetError, ConnectionAbortedError, ConnectionError, requests.exceptions.RequestException) as net_err:
+            print(f"  {YELLOW}⚡ Telegram connection reset (WinError 10054). Reconnecting in 3s...{RESET}")
+            time.sleep(3)
         except Exception as err:
-            restart_count += 1
-            print(f"\n{RED}[!] POLLING EXCEPTION (#{restart_count}):{RESET} {err}")
-            print(f"{YELLOW}[i] Reconnecting in 5 seconds... (CMD window will not close){RESET}")
-            time.sleep(5)
+            err_str = str(err).lower()
+            if "10054" in err_str or "connection" in err_str or "aborted" in err_str or "reset" in err_str:
+                print(f"  {YELLOW}⚡ Telegram connection reset (WinError 10054). Reconnecting in 3s...{RESET}")
+                time.sleep(3)
+            else:
+                restart_count += 1
+                print(f"\n{RED}[!] POLLING EXCEPTION (#{restart_count}):{RESET} {err}")
+                print(f"{YELLOW}[i] Reconnecting in 5 seconds... (CMD window will not close){RESET}")
+                time.sleep(5)
 
     print(f"\n{CYAN}Session ended. Press Enter to exit console.{RESET}")
     try:
