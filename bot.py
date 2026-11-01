@@ -678,8 +678,8 @@ def run_stream_pipeline(session_id: str, destination: str):
                 reply_markup=build_streaming_keyboard(session_id),
             )
 
-            # Auto-retry logic (up to 2 retries) if upload connection is dropped by host or timed out
-            max_retries = 2
+            # Auto-retry logic (up to 3 retries) if upload connection is dropped by host or timed out
+            max_retries = 3
             ok = False
             result = None
             for attempt in range(max_retries + 1):
@@ -698,20 +698,58 @@ def run_stream_pipeline(session_id: str, destination: str):
                 if ok or cancel_event.is_set():
                     break
 
-                res_str = str(result).lower()
-                is_conn_error = any(kw in res_str for kw in [
-                    "socket hang up", "connection closed", "connection lost",
-                    "disconnected", "timed out", "econnreset", "stalled"
-                ])
+                err_raw = str(result)
+                err_detail = err_raw
+                try:
+                    parsed_err = json.loads(err_raw)
+                    if isinstance(parsed_err, dict) and "message" in parsed_err:
+                        err_detail = parsed_err["message"]
+                except Exception:
+                    pass
 
-                if is_conn_error and attempt < max_retries and not cancel_event.is_set():
+                if attempt < max_retries and not cancel_event.is_set():
+                    # 1. Send separate error alert message directly to user chat
+                    retry_user_alert = (
+                        f"{EMOJI_ALERT} <b>TRANSFER INTERRUPTION DETECTED</b>\n{SEP}\n"
+                        f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                        f"📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
+                        f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
+                        f"⚠️ <b>Reason:</b> <code>{html.escape(err_detail[:250])}</code>\n"
+                        f"🔄 <b>Status:</b> Auto-reconnecting (Attempt {attempt + 2} of {max_retries + 1})...</blockquote>\n{SEP}\n"
+                        f"<i>⚡ Retrying automatically. Progress will resume in the card above.</i>"
+                    )
+                    try:
+                        bot.send_message(chat_id, retry_user_alert)
+                    except Exception as ue:
+                        print(f"[UserNotify] Failed to send retry alert: {ue}")
+
+                    # 2. Send error report to Error Channel (if configured)
+                    err_channel = db.get_setting("error_channel", "").strip()
+                    if err_channel:
+                        try:
+                            err_card_retry = (
+                                f"{EMOJI_ALERT} <b>TRANSFER ERROR LOG (Auto-Retry)</b>\n{SEP}\n"
+                                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                                f"📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
+                                f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
+                                f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
+                                f"⚠️ <b>Error:</b> <code>{html.escape(err_detail[:250])}</code>\n"
+                                f"🔄 <b>Attempt:</b> <code>{attempt + 2} of {max_retries + 1}</code>\n"
+                                f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n{SEP}"
+                            )
+                            bot.send_message(err_channel, err_card_retry)
+                        except Exception as ce:
+                            print(f"[ErrorChannel] Failed to send retry log: {ce}")
+
+                    # 3. Update the FIRST message with reconnecting status
                     retry_msg = (
                         f"🔄 <b>CONNECTION INTERRUPTED</b>\n{SEP}\n"
                         f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                         f"⚠️ <b>Host:</b> {dest_display} connection dropped.\n"
                         f"🔄 <b>Auto-Retrying:</b> Attempt <code>{attempt + 2} of {max_retries + 1}</code>...</blockquote>\n{SEP}\n"
-                        f"<i>Re-establishing transfer pipe and resuming...</i>"
+                        f"<i>⚡ Re-establishing transfer pipe and resuming...</i>"
                     )
+                    session["last_rendered_text"] = retry_msg
                     safe_edit_message(chat_id, message_id, retry_msg, reply_markup=build_streaming_keyboard(session_id))
                     time.sleep(3)
                     continue
@@ -723,6 +761,13 @@ def run_stream_pipeline(session_id: str, destination: str):
 
             if not ok:
                 error_msg = str(result)
+                try:
+                    parsed_err = json.loads(error_msg)
+                    if isinstance(parsed_err, dict) and "message" in parsed_err:
+                        error_msg = parsed_err["message"]
+                except Exception:
+                    pass
+
                 safe_edit_message(
                     chat_id,
                     message_id,
@@ -739,11 +784,12 @@ def run_stream_pipeline(session_id: str, destination: str):
                     try:
                         err_card = (
                             f"{EMOJI_ALERT} <b>TRANSFER ERROR LOG</b>\n{SEP}\n"
-                            f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
+                            f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                            f"📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                             f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
-                            f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:200])}</code>\n"
-                            f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n"
-                            f"{SEP}"
+                            f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
+                            f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:250])}</code>\n"
+                            f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n{SEP}"
                         )
                         bot.send_message(err_channel, err_card)
                     except Exception as ce:
