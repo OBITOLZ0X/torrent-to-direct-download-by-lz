@@ -282,7 +282,7 @@ class DatabaseManager:
         if self.is_banned(user_id):
             return "🚫 Banned"
         if self.is_registered(user_id):
-            return "👤 Registered User"
+            return "🟢 Active"
         return "❌ Not Registered"
 
     def get_user_info(self, user_id: int) -> dict:

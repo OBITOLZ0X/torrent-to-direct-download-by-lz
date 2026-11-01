@@ -202,48 +202,113 @@ def check_channel_membership(user_id: int) -> bool:
     try:
         member = bot.get_chat_member(bot_channel, user_id)
         return member.status in ("member", "administrator", "creator")
+    except ApiTelegramException as e:
+        err = str(e).lower()
+        if "user not found" in err or "chat not found" in err:
+            return False
+        print(f"[ChannelVerify] Telegram API error: {e}")
+        return False
     except Exception as e:
         print(f"[ChannelVerify] Could not check membership: {e}")
-        return True
+        return False
 
-def send_registration_prompt(chat_id: int, user_id: int, reply_to_id: int = None):
-    """Send blockquote registration banner."""
+def build_registration_view(user_id: int) -> tuple[str, types.InlineKeyboardMarkup]:
+    """
+    Construct dynamic registration view and inline keyboard based on user's current progress:
+    - If channel needed and not joined: show join button and verify button.
+    - If channel joined (or not needed) and not registered: show only Register Now button.
+    - If neither: show both Register Now and channel buttons.
+    """
     bot_channel = db.get_setting("bot_channel", "").strip()
     invite_link = db.get_setting("channel_invite", "").strip() or (f"https://t.me/{bot_channel.lstrip('@')}" if bot_channel else "")
+    channel_required = bool(bot_channel)
+    is_channel_member = check_channel_membership(user_id) if channel_required else True
+    is_reg = db.is_registered(user_id)
 
     kb = types.InlineKeyboardMarkup(row_width=1)
-    if invite_link:
-        kb.add(types.InlineKeyboardButton("📢 Join Channel", url=invite_link))
-    kb.add(types.InlineKeyboardButton("📝 Register Now", callback_data=f"reg:{user_id}"))
 
+    # 1. User registered, but channel not joined yet
+    if is_reg and channel_required and not is_channel_member:
+        text = (
+            "🔐 <b>CHANNEL MEMBERSHIP REQUIRED</b>\n"
+            f"{SEP}\n"
+            "<blockquote>✅ <b>Registration:</b> Complete\n"
+            "❌ <b>Channel:</b> Not a member yet</blockquote>\n"
+            f"{SEP}\n"
+            "<blockquote>1️⃣ Join our official channel (link below)\n"
+            "2️⃣ Click <b>Verify Channel Membership</b> to confirm</blockquote>\n"
+            f"{SEP}\n"
+            "🚀 <i>Join the channel and tap verify to start!</i>"
+        )
+        if invite_link:
+            kb.add(types.InlineKeyboardButton("📢 Join Channel", url=invite_link))
+        kb.add(types.InlineKeyboardButton("✅ Verify Channel Membership", callback_data=f"verify_channel:{user_id}"))
+        return text, kb
+
+    # 2. User joined channel (or no channel required), but not registered yet
+    if is_channel_member and not is_reg:
+        chan_line = "<blockquote>✅ <b>Channel Status:</b> Verified Member</blockquote>\n" if channel_required else ""
+        text = (
+            "🔐 <b>REGISTRATION REQUIRED</b>\n"
+            f"{SEP}\n"
+            f"<blockquote>👋 Welcome to <b>tDownUp</b>!</blockquote>\n"
+            f"{chan_line}"
+            "<blockquote>📝 <b>Final Step:</b> Register your account below</blockquote>\n"
+            f"{SEP}\n"
+            "🚀 <i>Tap 'Register Now' to complete setup!</i>"
+        )
+        kb.add(types.InlineKeyboardButton("📝 Register Now", callback_data=f"reg:{user_id}"))
+        return text, kb
+
+    # 3. Neither step completed (not registered and not in channel)
     text = (
         "🔐 <b>REGISTRATION REQUIRED</b>\n"
         f"{SEP}\n"
-        "<blockquote>👋 Welcome! You must register before using this bot.\n\n"
-        "1️⃣ Join our official channel (if required)\n"
-        "2️⃣ Tap <b>Register Now</b> below</blockquote>\n"
-        f"{SEP}"
+        "<blockquote>👋 Welcome to <b>tDownUp</b>!</blockquote>\n"
+        f"{SEP}\n"
+        "📋 <b>STEPS TO USE BOT</b>\n"
+        f"{SEP}\n"
+        "<blockquote>1️⃣ Register your account\n"
+        "2️⃣ Join our official channel</blockquote>\n"
+        f"{SEP}\n"
+        "🚀 <i>Click the buttons below to get started!</i>"
     )
+    kb.add(types.InlineKeyboardButton("📝 Register Now", callback_data=f"reg:{user_id}"))
+    if invite_link:
+        kb.add(types.InlineKeyboardButton("📢 Join Channel", url=invite_link))
+    kb.add(types.InlineKeyboardButton("✅ Verify Channel Membership", callback_data=f"verify_channel:{user_id}"))
+    return text, kb
+
+def send_registration_prompt(chat_id: int, user_id: int, reply_to_id: int = None):
+    """Send dynamic blockquote registration banner."""
+    text, kb = build_registration_view(user_id)
     if reply_to_id:
         bot.send_message(chat_id, text, reply_markup=kb, reply_to_message_id=reply_to_id)
     else:
         bot.send_message(chat_id, text, reply_markup=kb)
 
 def check_user_access(message: types.Message) -> bool:
-    """Validate user registration, ban status, and bot mode."""
+    """Validate user registration, channel membership, ban status, and bot mode."""
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    allowed, reason = db.check_access(user_id, ADMIN_ID)
-    if allowed:
+    if user_id == ADMIN_ID:
         return True
 
-    if reason == "REGISTRATION_REQUIRED":
+    allowed, reason = db.check_access(user_id, ADMIN_ID)
+    if not allowed:
+        if reason == "REGISTRATION_REQUIRED":
+            send_registration_prompt(chat_id, user_id, message.id)
+            return False
+        bot.reply_to(message, reason)
+        return False
+
+    # Also verify channel membership if channel is configured
+    if not check_channel_membership(user_id):
         send_registration_prompt(chat_id, user_id, message.id)
         return False
 
-    bot.reply_to(message, reason)
-    return False
+    return True
 
 # ================= Selection Keyboard & Display =================
 
@@ -1006,19 +1071,14 @@ def handle_donate_command(message: types.Message):
     """Direct command to view donation information."""
     bot.reply_to(message, render_donation_card(), disable_web_page_preview=True)
 
-@bot.message_handler(commands=["start", "help"])
-def handle_start(message: types.Message):
-    """Welcome and usage instructions. Clean layout with owner contact and no settings leaks."""
-    if not check_user_access(message):
-        return
-
-    user_id = message.from_user.id
-    status_label = db.get_user_status_label(user_id, ADMIN_ID)
+def render_start_text(user_id: int, user_name: str) -> str:
+    """Welcome and usage instructions. Clean layout with owner contact and no status/role clutter."""
     admin_contact = get_admin_contact()
+    clean_name = html.escape(user_name or "User")
 
-    text = (
+    return (
         "👋 <b>Welcome to tDownUp!</b>\n\n"
-        f"👤 <b>Your Status:</b> {status_label}\n\n"
+        f"👤 <b>User:</b> {clean_name}\n\n"
         "<b>tDownUp</b> allows you to download torrent files and magnet links directly to <b>Buzzheavier</b> and <b>Gofile</b> at high speeds.\n\n"
         "📥 <b>How to Use:</b>\n"
         "• Send <code>/dw &lt;magnet_link&gt;</code>\n"
@@ -1031,6 +1091,16 @@ def handle_start(message: types.Message):
         "💬 <b>Support & Assistance:</b>\n"
         f"If you need help or have questions, contact {admin_contact}."
     )
+
+@bot.message_handler(commands=["start", "help"])
+def handle_start(message: types.Message):
+    """Welcome and usage instructions. Clean layout with owner contact and no settings leaks."""
+    if not check_user_access(message):
+        return
+
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or message.from_user.username or "User"
+    text = render_start_text(user_id, user_name)
     bot.reply_to(message, text, disable_web_page_preview=True)
 
 @bot.message_handler(commands=["account"])
@@ -1040,7 +1110,7 @@ def handle_account(message: types.Message):
         return
 
     user_id = message.from_user.id
-    status_label = db.get_user_status_label(user_id, ADMIN_ID)
+    user_name = message.from_user.first_name or message.from_user.username or "User"
     info = db.get_user_info(user_id)
     is_admin = (user_id == ADMIN_ID)
 
@@ -1054,8 +1124,8 @@ def handle_account(message: types.Message):
     text = (
         "💳 <b>ACCOUNT INFORMATION</b>\n"
         f"{SEP}\n"
-        f"<blockquote>🆔 <b>User ID:</b> <code>{user_id}</code>\n"
-        f"👤 <b>Status:</b> {status_label}\n"
+        f"<blockquote>👤 <b>Name:</b> {html.escape(user_name)}\n"
+        f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
         f"📅 <b>Registered:</b> <code>{info.get('registered_at', 'N/A')}</code>\n"
         f"📊 <b>Today's Usage:</b> <code>{quota_str}</code>\n"
         f"📦 <b>Max File Size:</b> <code>{max_sz_str}</code>\n"
@@ -1351,23 +1421,54 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, "This registration button is not for you.", show_alert=True)
             return
 
+        # Register user in database
+        db.register_user(user_id, call.from_user.username or "")
+
+        bot_channel = db.get_setting("bot_channel", "").strip()
+        channel_required = bool(bot_channel)
+        is_channel_member = check_channel_membership(user_id) if channel_required else True
+
+        if is_channel_member:
+            # Both steps complete! Directly show /start welcome message
+            bot.answer_callback_query(call.id, "🎉 Welcome! Registration complete!")
+            user_name = call.from_user.first_name or call.from_user.username or "User"
+            welcome_text = render_start_text(user_id, user_name)
+            safe_edit_message(cid, mid, welcome_text, reply_markup=None)
+        else:
+            # Registration complete, but channel still needed -> Register button disappears!
+            bot.answer_callback_query(call.id, "✅ Registered! Please join our channel.")
+            text, kb = build_registration_view(user_id)
+            safe_edit_message(cid, mid, text, reply_markup=kb)
+        return
+
+    # 1.1 Channel Verification Callback
+    if data.startswith("verify_channel:"):
+        target_uid = int(data.split(":")[1])
+        if user_id != target_uid:
+            bot.answer_callback_query(call.id, "This verification button is not for you.", show_alert=True)
+            return
+
         if not check_channel_membership(user_id):
             bot.answer_callback_query(
                 call.id,
-                "⚠️ Please join our official channel first before registering!",
+                "⚠️ You have not joined the channel yet! Please join first.",
                 show_alert=True
             )
             return
 
-        db.register_user(user_id, call.from_user.username or "")
-        bot.answer_callback_query(call.id, "✅ Registration Complete!")
-        safe_edit_message(
-            cid,
-            mid,
-            f"✅ <b>REGISTRATION COMPLETE!</b>\n{SEP}\n"
-            f"🎉 Your account has been registered successfully!\n"
-            f"You can now send torrent magnet links or <code>.torrent</code> files to stream directly."
-        )
+        # Channel verified! Check if user is registered in DB
+        is_reg = db.is_registered(user_id)
+        if is_reg:
+            # Both steps complete! Directly show /start welcome message
+            bot.answer_callback_query(call.id, "🎉 Membership verified! Welcome!")
+            user_name = call.from_user.first_name or call.from_user.username or "User"
+            welcome_text = render_start_text(user_id, user_name)
+            safe_edit_message(cid, mid, welcome_text, reply_markup=None)
+        else:
+            # Channel verified, but registration still needed -> Channel buttons disappear!
+            bot.answer_callback_query(call.id, "✅ Channel verified! Tap Register Now below.")
+            text, kb = build_registration_view(user_id)
+            safe_edit_message(cid, mid, text, reply_markup=kb)
         return
 
     # 2. Public Donation Card Trigger (from completion message)
