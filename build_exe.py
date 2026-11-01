@@ -36,7 +36,12 @@ def build():
         print("[*] Refreshing node_modules.zip for standalone embedding...")
         if os.path.exists(zip_path):
             os.remove(zip_path)
-        shutil.make_archive(os.path.join(BASE_DIR, "node_modules"), "zip", node_modules_dir)
+        shutil.make_archive(
+            base_name=os.path.join(BASE_DIR, "node_modules"),
+            format="zip",
+            root_dir=BASE_DIR,
+            base_dir="node_modules"
+        )
 
     cmd = [
         sys.executable,

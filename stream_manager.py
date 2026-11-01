@@ -102,15 +102,20 @@ class StreamManager:
 
     def _ensure_node_modules(self):
         """Extract bundled node_modules.zip if node_modules folder is absent."""
-        if os.path.isdir(os.path.join(BASE_DIR, "node_modules")) or os.path.isdir(os.path.join(BUNDLE_DIR, "node_modules")):
-            return
-
         for search_dir in [BUNDLE_DIR, BASE_DIR]:
+            target_node_modules = os.path.join(search_dir, "node_modules")
+            if os.path.isdir(target_node_modules) and os.path.exists(os.path.join(target_node_modules, "webtorrent")):
+                return
+
             zip_file = os.path.join(search_dir, "node_modules.zip")
             if os.path.exists(zip_file):
                 try:
                     with zipfile.ZipFile(zip_file, "r") as zf:
-                        zf.extractall(search_dir)
+                        first_names = zf.namelist()[:5]
+                        has_prefix = any(name.startswith("node_modules/") or name.startswith("node_modules\\") for name in first_names)
+                        extract_to = search_dir if has_prefix else target_node_modules
+                        os.makedirs(extract_to, exist_ok=True)
+                        zf.extractall(extract_to)
                     return
                 except Exception as e:
                     print(f"[!] Warning unpacking node_modules.zip: {e}")
@@ -244,6 +249,7 @@ class StreamManager:
         Returns:
             (True, output_path) or (False, error_message)
         """
+        self._ensure_node_modules()
         cmd = [
             self.node_path,
             "--max-old-space-size=2048",
