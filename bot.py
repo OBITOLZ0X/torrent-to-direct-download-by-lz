@@ -1901,9 +1901,7 @@ def print_anya_banner(bot_info):
     bot_username = f"@{bot_info.username}" if (bot_info and bot_info.username) else "N/A"
     bot_id = str(bot_info.id) if bot_info else "N/A"
     stats = db.get_stats()
-    mode = stats["bot_mode"].upper()
-    users_count = stats["total_users"]
-    db_conn = "Connected" if db.is_github_connected() else "Offline / Not Set"
+    mode = stats.get("bot_mode", "public").upper()
 
     top_border = f"{CYAN}+{'-' * (width - 2)}+{RESET}"
     sep_line   = f"{CYAN}|{'-' * (width - 2)}|{RESET}"
@@ -1924,9 +1922,7 @@ def print_anya_banner(bot_info):
         (f"  {CYAN}*{RESET} {BOLD}Bot ID:{RESET}      {WHITE}{bot_id}{RESET}", len(f"  * Bot ID:      {bot_id}")),
         (f"  {CYAN}*{RESET} {BOLD}Admin ID:{RESET}    {YELLOW}{ADMIN_ID}{RESET}", len(f"  * Admin ID:    {ADMIN_ID}")),
         (f"  {CYAN}*{RESET} {BOLD}Bot Mode:{RESET}    {MAGENTA}{mode}{RESET}", len(f"  * Bot Mode:    {mode}")),
-        (f"  {CYAN}*{RESET} {BOLD}Cloud DB:{RESET}    {GREEN if 'Connected' in db_conn else RED}{db_conn}{RESET}", len(f"  * Cloud DB:    {db_conn}")),
-        (f"  {CYAN}*{RESET} {BOLD}Members:{RESET}     {WHITE}{users_count} registered{RESET}", len(f"  * Members:     {users_count} registered")),
-        (f"  {CYAN}*{RESET} {BOLD}Service:{RESET}     {GREEN}Direct Torrent to Cloud Uploader{RESET}", len("  * Service:     Direct Torrent to Cloud Uploader")),
+        (f"  {CYAN}*{RESET} {BOLD}Hosts:{RESET}       {CYAN}Buzzheavier.com & Gofile.io{RESET}", len("  * Hosts:       Buzzheavier.com & Gofile.io")),
     ]
 
     for line_str, raw_len in lines:
