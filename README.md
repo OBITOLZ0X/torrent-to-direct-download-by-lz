@@ -9,6 +9,20 @@
   <i>Direct live in-memory transfer pipe to Buzzheavier and Gofile with zero permanent disk footprint!</i>
 </p>
 
+<p align="center">
+  <a href="https://t.me/tDownUpLzbot" target="_blank">
+    <img src="https://img.shields.io/badge/Telegram_Bot-@tDownUpLzbot-24A1DE?style=for-the-badge&logo=telegram&logoColor=white" alt="Live Telegram Bot">
+  </a>
+</p>
+
+---
+
+## 🤖 Try the Live Bot
+
+Experience **tDownUp** directly on Telegram right now without installing anything:
+
+👉 **[@tDownUpLzbot](https://t.me/tDownUpLzbot)** 👈
+
 ---
 
 ## 📖 What is tDownUp?
