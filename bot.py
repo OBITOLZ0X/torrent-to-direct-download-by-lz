@@ -46,7 +46,7 @@ from utils import (
     truncate_text,
 )
 from torrent_manager import Aria2Manager
-from stream_manager import StreamManager
+from stream_manager import StreamManager, StreamController
 from database import db
 from github_client import GitHubClient
 
@@ -388,11 +388,33 @@ def build_destination_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     kb.add(types.InlineKeyboardButton("← Back to Selection", callback_data=f"back_select:{session_id}"))
     return kb
 
-def build_stop_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
-    """Keyboard containing the Stop button during live streaming."""
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🛑 Stop", callback_data=f"stop:{session_id}"))
+def build_streaming_keyboard(session_id: str, is_paused: bool = False) -> types.InlineKeyboardMarkup:
+    """Construct keyboard with Pause / Continue and Stop buttons during live streaming."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    if is_paused:
+        kb.add(
+            types.InlineKeyboardButton("▶️ Continue", callback_data=f"resume:{session_id}"),
+            types.InlineKeyboardButton("🛑 Stop", callback_data=f"confirm_stop:{session_id}")
+        )
+    else:
+        kb.add(
+            types.InlineKeyboardButton("⏸️ Pause", callback_data=f"pause:{session_id}"),
+            types.InlineKeyboardButton("🛑 Stop", callback_data=f"confirm_stop:{session_id}")
+        )
     return kb
+
+def build_stop_confirm_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
+    """Construct confirmation keyboard when user clicks Stop."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("✅ Yes, Stop", callback_data=f"do_stop:{session_id}"),
+        types.InlineKeyboardButton("❌ No, Go Back", callback_data=f"cancel_stop:{session_id}")
+    )
+    return kb
+
+def build_stop_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
+    """Backward-compatible helper."""
+    return build_streaming_keyboard(session_id, is_paused=False)
 
 def render_selection_message(session_id: str) -> str:
     """Render the files selection overview message with animated emojis and clean cards."""
@@ -499,6 +521,12 @@ def run_stream_pipeline(session_id: str, destination: str):
     total_files = len(files_to_stream)
     uploaded_results = []
 
+    session["is_paused"] = False
+    controller = StreamController()
+    session["controller"] = controller
+    session["current_filename"] = ""
+    session["last_rendered_text"] = ""
+
     last_ui_update = [0.0]
 
     try:
@@ -511,6 +539,7 @@ def run_stream_pipeline(session_id: str, destination: str):
             fname = file_info["name"]
             fsize = file_info["length"]
             fsize_str = human_readable_size(fsize)
+            session["current_filename"] = fname
 
             def on_stream_progress(ev: dict):
                 now = time.time()
@@ -524,9 +553,13 @@ def run_stream_pipeline(session_id: str, destination: str):
                 speed = ev.get("speed", 0.0)
                 eta = ev.get("eta", 0.0)
                 peers = ev.get("peers", 0)
+                is_p = session.get("is_paused", False) or ev.get("isPaused", False)
+
+                status_title = "⏸️ <b>STREAM PAUSED</b>" if is_p else f"{EMOJI_STREAM_UP} <b>STREAMING IN PROGRESS</b>"
+                footer = "<i>⏸️ Stream is paused. Tap <b>Continue</b> below to resume.</i>" if is_p else f"<i>{EMOJI_SPEED} Streaming directly to {dest_display}...</i>"
 
                 text = (
-                    f"{EMOJI_STREAM_UP} <b>STREAMING IN PROGRESS</b>\n"
+                    f"{status_title}\n"
                     f"{SEP}\n"
                     f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                     f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
@@ -540,43 +573,86 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"{EMOJI_PEERS} <b>Peers:</b> <code>{peers} connected</code>\n"
                     f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
                     f"{SEP}\n"
-                    f"<i>{EMOJI_SPEED} Streaming directly to {dest_display}...</i>"
+                    f"{footer}"
                 )
-                safe_edit_message(chat_id, message_id, text, reply_markup=build_stop_keyboard(session_id))
+                session["last_rendered_text"] = text
+                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=is_p))
 
             # Initial message
-            safe_edit_message(
-                chat_id,
-                message_id,
+            init_text = (
                 f"{EMOJI_STREAM_DOWN} <b>CONNECTING TO BITTORRENT SWARM...</b>\n"
                 f"{SEP}\n"
                 f"<blockquote>📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
                 f"{EMOJI_GLOBE} <b>Destination:</b> <b>{dest_display}</b></blockquote>\n"
                 f"{SEP}\n"
-                f"<i>{EMOJI_SPEED} Establishing peer connections and starting stream...</i>",
-                reply_markup=build_stop_keyboard(session_id),
+                f"<i>{EMOJI_SPEED} Establishing peer connections and starting stream...</i>"
+            )
+            session["last_rendered_text"] = init_text
+            safe_edit_message(
+                chat_id,
+                message_id,
+                init_text,
+                reply_markup=build_streaming_keyboard(session_id, is_paused=False),
             )
 
-            ok, result = stream_mgr.stream_file(
-                torrent_source=torrent_path,
-                file_zero_index=zero_idx,
-                destination=destination,
-                progress_callback=on_stream_progress,
-                cancel_event=cancel_event,
-            )
+            # Auto-retry logic (up to 2 retries) if upload connection is dropped by host or timed out
+            max_retries = 2
+            ok = False
+            result = None
+            for attempt in range(max_retries + 1):
+                if cancel_event.is_set():
+                    break
+
+                ok, result = stream_mgr.stream_file(
+                    torrent_source=torrent_path,
+                    file_zero_index=zero_idx,
+                    destination=destination,
+                    progress_callback=on_stream_progress,
+                    cancel_event=cancel_event,
+                    controller=controller,
+                )
+
+                if ok or cancel_event.is_set():
+                    break
+
+                res_str = str(result).lower()
+                is_conn_error = any(kw in res_str for kw in [
+                    "socket hang up", "connection closed", "connection lost",
+                    "disconnected", "timed out", "econnreset", "stalled"
+                ])
+
+                if is_conn_error and attempt < max_retries and not cancel_event.is_set():
+                    retry_msg = (
+                        f"🔄 <b>CONNECTION INTERRUPTED</b>\n{SEP}\n"
+                        f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
+                        f"⚠️ <b>Host:</b> {dest_display} connection dropped.\n"
+                        f"🔄 <b>Auto-Retrying:</b> Attempt <code>{attempt + 2} of {max_retries + 1}</code>...</blockquote>\n{SEP}\n"
+                        f"<i>Re-establishing RAM stream pipe and resuming...</i>"
+                    )
+                    safe_edit_message(chat_id, message_id, retry_msg, reply_markup=build_streaming_keyboard(session_id, is_paused=False))
+                    time.sleep(3)
+                    continue
+                else:
+                    break
 
             if cancel_event.is_set():
                 break
 
             if not ok:
                 error_msg = str(result)
+                friendly_reason = error_msg
+                if "socket hang up" in error_msg.lower() or "connection closed" in error_msg.lower():
+                    friendly_reason = f"انقطع الاتصال بخادم {dest_display} (انتهت مهلة الانتظار أو أغلق السيرفر الاتصال)"
+                elif "timed out" in error_msg.lower() or "stalled" in error_msg.lower():
+                    friendly_reason = f"انتهت مهلة اتصال خادم {dest_display}"
+
                 safe_edit_message(
                     chat_id,
                     message_id,
                     f"{EMOJI_ALERT} <b>STREAM ERROR</b>\n"
                     f"{SEP}\n"
                     f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
-                    f"⚠️ <b>Reason:</b> <code>{html.escape(error_msg)}</code></blockquote>\n"
+                    f"⚠️ <b>Reason:</b> <code>{html.escape(friendly_reason)}</code></blockquote>\n"
                     f"{SEP}\n"
                     f"<i>If the problem persists, please contact the bot owner.</i>",
                     reply_markup=None,
@@ -681,7 +757,17 @@ def process_torrent_source(message: types.Message, magnet_link: str = None, torr
             with open(torrent_filepath, "wb") as f:
                 f.write(torrent_bytes)
         elif magnet_link:
-            ok, res = aria2.fetch_magnet_metadata(magnet_link, timeout=45)
+            def on_meta_status(peers: int, elapsed: int):
+                safe_edit_message(
+                    chat_id,
+                    status_msg.message_id,
+                    f"🔍 <b>CONNECTING TO SWARM & FETCHING METADATA...</b>\n{SEP}\n"
+                    f"<blockquote>👥 <b>Connected Peers:</b> <code>{peers}</code>\n"
+                    f"⏱️ <b>Elapsed:</b> <code>{elapsed}s / 80s</code></blockquote>\n{SEP}\n"
+                    f"<i>Searching DHT network and global trackers for torrent headers...</i>"
+                )
+
+            ok, res = aria2.fetch_magnet_metadata(magnet_link, timeout=80, status_callback=on_meta_status)
             if not ok:
                 safe_edit_message(
                     chat_id,
@@ -2106,9 +2192,114 @@ def handle_callbacks(call: types.CallbackQuery):
         session["status"] = "running"
         threading.Thread(target=run_stream_pipeline, args=(session_id, destination), daemon=True).start()
 
-    elif action == "stop":
-        bot.answer_callback_query(call.id, "🛑 Stopping download...")
-        session["cancel_event"].set()
+    elif action == "pause":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            session["is_paused"] = True
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.pause()
+            bot.answer_callback_query(call.id, "⏸️ تم إيقاف الرفع مؤقتاً")
+            last_text = session.get("last_rendered_text")
+            if last_text:
+                paused_text = last_text.replace("STREAMING IN PROGRESS", "STREAM PAUSED")
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    paused_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=True)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
+    elif action == "resume":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            session["is_paused"] = False
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.resume()
+            bot.answer_callback_query(call.id, "▶️ جارٍ استئناف الرفع...")
+            last_text = session.get("last_rendered_text")
+            if last_text:
+                resumed_text = last_text.replace("STREAM PAUSED", "STREAMING IN PROGRESS")
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    resumed_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=False)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
+    elif action == "confirm_stop":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            # Pause during confirmation
+            session["is_paused"] = True
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.pause()
+            bot.answer_callback_query(call.id)
+            t_name = session.get("torrent_name", "Torrent")
+            curr_file = session.get("current_filename", "")
+            file_line = f"📄 <b>File:</b> <code>{html.escape(curr_file)}</code>\n" if curr_file else ""
+            confirm_text = (
+                f"🛑 <b>CONFIRM STOP</b>\n{SEP}\n"
+                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(t_name)}</code>\n"
+                f"{file_line}"
+                f"⚠️ <b>هل أنت متأكد من رغبتك في إيقاف التحميل والرفع بشكل نهائي؟</b></blockquote>\n{SEP}\n"
+                f"<i>اضغط <b>Yes</b> للإلغاء التام، أو <b>No</b> للرجوع لشاشة الرفع في وضع الإيقاف المؤقت.</i>"
+            )
+            safe_edit_message(
+                session["chat_id"],
+                session["message_id"],
+                confirm_text,
+                reply_markup=build_stop_confirm_keyboard(session_id)
+            )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
+    elif action == "do_stop" or action == "stop":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            bot.answer_callback_query(call.id, "🛑 Stopping download...")
+            session["cancel_event"].set()
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.stop()
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
+    elif action == "cancel_stop":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            bot.answer_callback_query(call.id, "↩️ تم الرجوع. الرفع في حالة إيقاف مؤقت (اضغط Continue للمتابعة)")
+            # As requested by user: return in paused state, must tap continue to resume
+            session["is_paused"] = True
+            last_text = session.get("last_rendered_text")
+            if last_text:
+                paused_text = last_text.replace("STREAMING IN PROGRESS", "STREAM PAUSED")
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    paused_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=True)
+                )
+            else:
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    f"⏸️ <b>STREAM PAUSED</b>\n{SEP}\n<i>Stream is paused. Tap <b>Continue</b> below to resume.</i>",
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=True)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
 
     elif action == "noop":
         bot.answer_callback_query(call.id)

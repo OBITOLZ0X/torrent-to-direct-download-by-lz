@@ -40,6 +40,47 @@ def find_node_executable() -> str:
 
     return "node"
 
+class StreamController:
+    """Provides thread-safe pause, resume, and stop controls for an active streamer process."""
+    def __init__(self):
+        self.proc: Optional[subprocess.Popen] = None
+        self.is_paused: bool = False
+        self._lock = threading.Lock()
+
+    def bind(self, proc: subprocess.Popen):
+        with self._lock:
+            self.proc = proc
+            if self.is_paused:
+                self._send_cmd("PAUSE")
+
+    def pause(self):
+        with self._lock:
+            self.is_paused = True
+            self._send_cmd("PAUSE")
+
+    def resume(self):
+        with self._lock:
+            self.is_paused = False
+            self._send_cmd("RESUME")
+
+    def stop(self):
+        with self._lock:
+            self._send_cmd("STOP")
+            if self.proc and self.proc.poll() is None:
+                try:
+                    self.proc.terminate()
+                except Exception:
+                    pass
+
+    def _send_cmd(self, cmd: str):
+        if self.proc and self.proc.poll() is None and self.proc.stdin:
+            try:
+                self.proc.stdin.write(f"{cmd}\n")
+                self.proc.stdin.flush()
+            except Exception:
+                pass
+
+
 class StreamManager:
     """
     Manages live memory-streaming from BitTorrent swarm directly to Buzzheavier or Gofile.io.
@@ -79,6 +120,7 @@ class StreamManager:
         destination: str = "buzzheavier",
         progress_callback=None,
         cancel_event: threading.Event = None,
+        controller: Optional[StreamController] = None,
     ) -> tuple[bool, str]:
         """
         Stream a specific file from torrent in RAM straight to the chosen destination (buzzheavier or gofile).
@@ -120,6 +162,7 @@ class StreamManager:
         try:
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -128,6 +171,8 @@ class StreamManager:
                 env=env,
                 creationflags=creationflags,
             )
+            if controller:
+                controller.bind(proc)
         except Exception as e:
             return False, f"Failed to start streaming process: {e}"
 
@@ -136,7 +181,10 @@ class StreamManager:
 
         while True:
             if cancel_event and cancel_event.is_set():
-                proc.terminate()
+                if controller:
+                    controller.stop()
+                else:
+                    proc.terminate()
                 try:
                     proc.wait(timeout=2)
                 except Exception:
@@ -180,3 +228,51 @@ class StreamManager:
             return True, result_url
 
         return False, error_msg or "Stream finished without returning a URL."
+
+    def fetch_magnet_metadata(self, magnet_link: str, output_path: str, timeout: int = 45) -> tuple[bool, str]:
+        """
+        Fast WebTorrent fallback to fetch magnet metadata and write .torrent file.
+        Returns:
+            (True, output_path) or (False, error_message)
+        """
+        cmd = [
+            self.node_path,
+            self.streamer_script,
+            "--source",
+            magnet_link,
+            "--get-metadata",
+            "--output",
+            output_path,
+        ]
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        env = os.environ.copy()
+        node_paths = [
+            os.path.join(BASE_DIR, "node_modules"),
+            os.path.join(BUNDLE_DIR, "node_modules"),
+            os.path.join(os.path.dirname(self.streamer_script), "node_modules"),
+        ]
+        existing_node_path = env.get("NODE_PATH", "")
+        if existing_node_path:
+            node_paths.append(existing_node_path)
+        env["NODE_PATH"] = os.pathsep.join(node_paths)
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=BASE_DIR,
+                env=env,
+                creationflags=creationflags,
+            )
+            stdout_data, stderr_data = proc.communicate(timeout=timeout)
+            if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return True, output_path
+            return False, stderr_data.strip() or "WebTorrent could not resolve metadata within timeout."
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "WebTorrent metadata resolution timed out."
+        except Exception as e:
+            return False, str(e)

@@ -26,6 +26,14 @@ DEFAULT_TRACKERS = [
     "http://tracker.openbittorrent.com:80/announce",
     "udp://tracker.moeking.me:6969/announce",
     "udp://explodie.org:6969/announce",
+    "udp://opentracker.i2p.rocks:6969/announce",
+    "udp://open.tracker.cl:1337/announce",
+    "udp://tracker.cyberia.is:6969/announce",
+    "udp://tracker.qu.ax:6969/announce",
+    "udp://opentor.net:6969/announce",
+    "udp://tracker.internetwarriors.net:1337/announce",
+    "udp://tracker.filemail.com:6969/announce",
+    "udp://p4p.arenabg.com:1337/announce",
 ]
 
 class Aria2Manager:
@@ -51,7 +59,7 @@ class Aria2Manager:
         except Exception:
             pass
 
-        # Spawn aria2c daemon
+        # Spawn aria2c daemon with optimized BitTorrent & DHT swarm discovery
         trackers_arg = f"--bt-tracker={','.join(DEFAULT_TRACKERS)}"
         cmd = [
             ARIA2_PATH,
@@ -60,7 +68,17 @@ class Aria2Manager:
             "--rpc-allow-origin-all",
             "--seed-time=0",
             "--file-allocation=none",
-            "--bt-tracker-connect-timeout=5",
+            "--bt-tracker-connect-timeout=10",
+            "--bt-tracker-timeout=15",
+            "--bt-max-peers=120",
+            "--bt-request-peer-speed-limit=0",
+            "--enable-dht=true",
+            "--enable-dht6=false",
+            "--enable-peer-exchange=true",
+            "--bt-enable-lpd=true",
+            "--dht-entry-point=dht.transmissionbt.com:6881",
+            "--dht-entry-point=router.bittorrent.com:6881",
+            "--dht-entry-point=router.utorrent.com:6881",
             "--max-overall-upload-limit=1K",
             trackers_arg,
             f"--dir={DOWNLOADS_DIR}",
@@ -99,9 +117,10 @@ class Aria2Manager:
             raise RuntimeError(f"aria2 RPC error: {data['error']}")
         return data.get("result")
 
-    def fetch_magnet_metadata(self, magnet_link: str, timeout: int = 40) -> tuple[bool, str]:
+    def fetch_magnet_metadata(self, magnet_link: str, timeout: int = 80, status_callback=None) -> tuple[bool, str]:
         """
         Fetch torrent metadata from a magnet link and save as a .torrent file.
+        Uses optimized Aria2 with WebTorrent dual-engine fallback.
         Returns:
             (True, path_to_torrent_file) or (False, error_message)
         """
@@ -110,11 +129,13 @@ class Aria2Manager:
 
         # Check if already cached by info_hash
         match = re.search(r"urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})", magnet_link, re.IGNORECASE)
-        if match:
-            hash_str = match.group(1).lower()
+        hash_str = match.group(1).lower() if match else ""
+        if hash_str:
             cached_path = os.path.join(METADATA_DIR, f"{hash_str}.torrent")
             if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
                 return True, cached_path
+        else:
+            cached_path = os.path.join(METADATA_DIR, f"meta_{int(time.time())}.torrent")
 
         options = {
             "bt-metadata-only": "true",
@@ -122,58 +143,92 @@ class Aria2Manager:
             "dir": METADATA_DIR,
             "allow-overwrite": "true",
             "auto-file-renaming": "false",
-            "bt-tracker-connect-timeout": "5",
+            "bt-tracker-connect-timeout": "10",
+            "bt-tracker-timeout": "15",
+            "bt-max-peers": "120",
+            "enable-dht": "true",
+            "enable-peer-exchange": "true",
+            "bt-tracker": ",".join(DEFAULT_TRACKERS),
         }
 
+        gid = None
         try:
             gid = self.call_rpc("aria2.addUri", [[magnet_link], options])
         except Exception as e:
-            return False, f"Failed to add magnet link: {e}"
+            print(f"[Aria2] Warning adding magnet via RPC: {e}")
 
         start_time = time.time()
         torrent_file = None
+        webtorrent_fallback_attempted = False
 
         while time.time() - start_time < timeout:
             time.sleep(1)
-            try:
-                status = self.call_rpc("aria2.tellStatus", [gid])
-            except Exception:
-                break
+            elapsed = int(time.time() - start_time)
 
-            current_status = status.get("status")
-            if current_status == "complete":
-                # Find the newly saved .torrent file
-                followed = status.get("followedBy")
-                info_hash = status.get("infoHash")
-                if info_hash:
-                    expected = os.path.join(METADATA_DIR, f"{info_hash}.torrent")
-                    if os.path.exists(expected):
-                        torrent_file = expected
-                if not torrent_file:
-                    # Search metadata dir for latest .torrent file
-                    candidates = [os.path.join(METADATA_DIR, f) for f in os.listdir(METADATA_DIR) if f.endswith(".torrent")]
-                    if candidates:
-                        torrent_file = max(candidates, key=os.path.getmtime)
+            if gid:
                 try:
-                    self.call_rpc("aria2.removeDownloadResult", [gid])
-                except Exception:
-                    pass
-                break
+                    status = self.call_rpc("aria2.tellStatus", [gid])
+                    current_status = status.get("status")
+                    connections = int(status.get("connections", 0))
 
-            elif current_status == "error":
-                err = status.get("errorMessage", "Failed to resolve metadata.")
-                try:
-                    self.call_rpc("aria2.removeDownloadResult", [gid])
+                    if status_callback and (elapsed % 3 == 0):
+                        status_callback(connections, elapsed)
+
+                    if current_status == "complete":
+                        info_hash = status.get("infoHash")
+                        if info_hash:
+                            expected = os.path.join(METADATA_DIR, f"{info_hash}.torrent")
+                            if os.path.exists(expected):
+                                torrent_file = expected
+                        if not torrent_file:
+                            candidates = [os.path.join(METADATA_DIR, f) for f in os.listdir(METADATA_DIR) if f.endswith(".torrent")]
+                            if candidates:
+                                torrent_file = max(candidates, key=os.path.getmtime)
+                        try:
+                            self.call_rpc("aria2.removeDownloadResult", [gid])
+                        except Exception:
+                            pass
+                        break
+
+                    elif current_status == "error":
+                        gid = None
                 except Exception:
-                    pass
-                return False, f"Metadata error: {err}"
+                    gid = None
+
+            # If aria2 has not resolved after 30 seconds or failed, try WebTorrent engine in parallel / fallback
+            if not torrent_file and elapsed >= 30 and not webtorrent_fallback_attempted:
+                webtorrent_fallback_attempted = True
+                try:
+                    from stream_manager import StreamManager
+                    sm = StreamManager()
+                    fallback_out = cached_path
+                    ok, res = sm.fetch_magnet_metadata(magnet_link, fallback_out, timeout=max(20, int(timeout - elapsed)))
+                    if ok and os.path.exists(res) and os.path.getsize(res) > 0:
+                        torrent_file = res
+                        if gid:
+                            try:
+                                self.call_rpc("aria2.forceRemove", [gid])
+                                self.call_rpc("aria2.removeDownloadResult", [gid])
+                            except Exception:
+                                pass
+                        break
+                except Exception as wt_err:
+                    print(f"[WebTorrent Fallback] Error: {wt_err}")
 
         if not torrent_file or not os.path.exists(torrent_file):
-            try:
-                self.call_rpc("aria2.forceRemove", [gid])
-                self.call_rpc("aria2.removeDownloadResult", [gid])
-            except Exception:
-                pass
+            if gid:
+                try:
+                    self.call_rpc("aria2.forceRemove", [gid])
+                    self.call_rpc("aria2.removeDownloadResult", [gid])
+                except Exception:
+                    pass
+            # Final fallback check: look if any recent .torrent was created
+            candidates = [os.path.join(METADATA_DIR, f) for f in os.listdir(METADATA_DIR) if f.endswith(".torrent")]
+            if candidates:
+                latest = max(candidates, key=os.path.getmtime)
+                if time.time() - os.path.getmtime(latest) < timeout + 5:
+                    return True, latest
+
             return False, "Could not fetch torrent metadata within timeout. Check peers/trackers."
 
         return True, torrent_file
