@@ -44,7 +44,13 @@ def build():
         "--onefile",
         "--console",
         "--name",
-        "TorrentStreamBot",
+        "tDownUp",
+        "--icon",
+        "icon.ico",
+        "--add-data",
+        f"icon.ico{os.pathsep}.",
+        "--add-data",
+        f"icon.png{os.pathsep}.",
         "--add-data",
         f"streamer.mjs{os.pathsep}.",
         "--add-data",
@@ -79,12 +85,12 @@ def build():
     subprocess.check_call(cmd, cwd=BASE_DIR)
 
     dist_dir = os.path.join(BASE_DIR, "dist")
-    dist_exe = os.path.join(dist_dir, "TorrentStreamBot.exe")
+    dist_exe = os.path.join(dist_dir, "tDownUp.exe")
 
-    # Clean up dist so ONLY TorrentStreamBot.exe exists there
+    # Clean up dist so ONLY tDownUp.exe exists there
     if os.path.exists(dist_dir):
         for item in os.listdir(dist_dir):
-            if item.lower() != "torrentstreambot.exe":
+            if item.lower() != "tdownup.exe":
                 item_path = os.path.join(dist_dir, item)
                 if os.path.isfile(item_path):
                     os.remove(item_path)
@@ -95,7 +101,7 @@ def build():
         print("\n" + "=" * 60)
         print("  BUILD SUCCESSFUL!")
         print(f"  Single Standalone Executable created at: {dist_exe}")
-        print("  Everything (Python, Aria2, Streamer, Libraries) is bundled inside this ONE file!")
+        print("  Everything (Python, Node.js, Aria2, Streamer, Icon) is bundled inside this ONE file!")
         print("=" * 60)
     else:
         print("\n[!] Build completed. Check 'dist' folder.")

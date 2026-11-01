@@ -76,9 +76,9 @@ def load_or_prompt_auth() -> dict:
 
     if not token or token == "YOUR_BOT_TOKEN_HERE" or not admin_id:
         if os.name == "nt":
-            os.system("title Torrent Stream Bot - Initial Setup")
+            os.system("title tDownUp - Initial Setup")
         print("\n" + CYAN + "=" * 65 + RESET)
-        print(f"{BOLD}{WHITE}         ⚡ TORRENT STREAM BOT - INITIAL SETUP ⚡{RESET}")
+        print(f"{BOLD}{WHITE}             ⚡ tDownUp BOT - INITIAL SETUP ⚡{RESET}")
         print(CYAN + "=" * 65 + RESET)
         print(f"{YELLOW}[!] No saved credentials found. Please enter bot credentials:{RESET}\n")
 

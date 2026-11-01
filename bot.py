@@ -409,7 +409,6 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"⚡ <b>Speed:</b> {human_readable_size(speed)}/s\n"
                     f"⏳ <b>ETA:</b> {format_time(eta)}\n"
                     f"👥 <b>Peers:</b> {peers}\n"
-                    f"💾 <b>Storage:</b> 0 B (Direct RAM Relay)\n"
                     f"📦 <b>File:</b> {step_num} of {total_files}"
                 )
                 safe_edit_message(chat_id, message_id, text, reply_markup=build_stop_keyboard(session_id))
@@ -471,8 +470,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"📦 <b>Size:</b> <code>{fsize_str}</code>\n"
                         f"🌐 <b>Host:</b> {dest_display}\n"
                         f"🔗 <b>Link:</b> <a href=\"{result}\">Download File</a>\n"
-                        f"👤 <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
-                        f"💾 <b>Relay:</b> Direct RAM Stream (0 B RDP Disk)</blockquote>\n"
+                        f"👤 <b>User:</b> @{user_name} (<code>{user_id}</code>)</blockquote>\n"
                         f"{SEP}"
                     )
                     bot.send_message(res_channel, res_card, disable_web_page_preview=False)
@@ -500,8 +498,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 f"📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                 f"🌐 <b>Host:</b> {dest_display}\n\n"
                 f"🔗 <b>Download Links:</b>\n"
-                f"{links_section}\n"
-                f"💾 <i>0 Bytes retained on RDP.</i>"
+                f"{links_section}"
             )
             # Add Donate Button below completion message
             done_kb = types.InlineKeyboardMarkup()
@@ -982,12 +979,9 @@ def handle_start(message: types.Message):
     admin_contact = get_admin_contact()
 
     text = (
-        "👋 <b>Welcome to the Torrent-to-Direct Stream Bot!</b>\n\n"
-        f"👤 <b>Your Status:</b> {status_label}\n"
-        "⚡ <b>Direct Stream Relay:</b>\n"
-        "Downloads data from BitTorrent and streams it directly to "
-        "<b>Buzzheavier.com</b> or <b>Gofile.io</b> in real-time "
-        "<b>with 0 bytes saved on RDP!</b>\n\n"
+        "👋 <b>Welcome to tDownUp!</b>\n\n"
+        f"👤 <b>Your Status:</b> {status_label}\n\n"
+        "<b>tDownUp</b> allows you to download torrent files and magnet links directly to <b>Buzzheavier</b> and <b>Gofile</b> at high speeds.\n\n"
         "📥 <b>How to Use:</b>\n"
         "• Send <code>/dw &lt;magnet_link&gt;</code>\n"
         "• Or reply to a <code>.torrent</code> file with <code>/dw</code>\n"
@@ -995,7 +989,7 @@ def handle_start(message: types.Message):
         "• Or simply paste any magnet link!\n\n"
         "📌 <b>Commands:</b>\n"
         "• <code>/account</code> - View your daily downloads quota & limits\n"
-        "• <code>/donate</code> - Support the project & server hosting\n\n"
+        "• <code>/donate</code> - Support the project\n\n"
         "💬 <b>Support & Assistance:</b>\n"
         f"If you need help or have questions, contact {admin_contact}."
     )
@@ -1903,7 +1897,7 @@ def handle_callbacks(call: types.CallbackQuery):
 def print_anya_banner(bot_info):
     """Render a clean, colorful console status dashboard inspired by Anya Bot."""
     width = 68
-    bot_name = bot_info.first_name if bot_info else "Torrent Stream Bot"
+    bot_name = bot_info.first_name if bot_info else "tDownUp"
     bot_username = f"@{bot_info.username}" if (bot_info and bot_info.username) else "N/A"
     bot_id = str(bot_info.id) if bot_info else "N/A"
     stats = db.get_stats()
@@ -1920,8 +1914,8 @@ def print_anya_banner(bot_info):
         return f"{CYAN}|{RESET} {content}{' ' * max(0, pad)} {CYAN}|{RESET}"
 
     print("\n" + top_border)
-    title = f"{BOLD}{WHITE}        TORRENT-TO-DIRECT STREAM BOT (V2.0 CLOUD EDITION){RESET}"
-    print(pad_line(title, 57))
+    title = f"{BOLD}{WHITE}             ⚡ tDownUp BOT (V2.0 CLOUD EDITION) ⚡{RESET}"
+    print(pad_line(title, 51))
     print(sep_line)
 
     lines = [
@@ -1932,7 +1926,7 @@ def print_anya_banner(bot_info):
         (f"  {CYAN}*{RESET} {BOLD}Bot Mode:{RESET}    {MAGENTA}{mode}{RESET}", len(f"  * Bot Mode:    {mode}")),
         (f"  {CYAN}*{RESET} {BOLD}Cloud DB:{RESET}    {GREEN if 'Connected' in db_conn else RED}{db_conn}{RESET}", len(f"  * Cloud DB:    {db_conn}")),
         (f"  {CYAN}*{RESET} {BOLD}Members:{RESET}     {WHITE}{users_count} registered{RESET}", len(f"  * Members:     {users_count} registered")),
-        (f"  {CYAN}*{RESET} {BOLD}Relay Mode:{RESET}  {GREEN}Live RAM Pipe (Buzzheavier & Gofile){RESET}", len("  * Relay Mode:  Live RAM Pipe (Buzzheavier & Gofile)")),
+        (f"  {CYAN}*{RESET} {BOLD}Service:{RESET}     {GREEN}Direct Torrent to Cloud Uploader{RESET}", len("  * Service:     Direct Torrent to Cloud Uploader")),
     ]
 
     for line_str, raw_len in lines:
@@ -1946,7 +1940,7 @@ def print_anya_banner(bot_info):
 def main():
     """Main execution loop with crash protection and auto-reconnect."""
     if os.name == "nt":
-        os.system("title Torrent-to-Direct Stream Bot (Active)")
+        os.system("title tDownUp Bot (Active)")
 
     try:
         bot_info = bot.get_me()

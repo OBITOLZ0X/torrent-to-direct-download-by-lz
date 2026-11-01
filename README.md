@@ -1,174 +1,89 @@
-# 🚀 Torrent-to-Direct-Download Stream Bot (Buzzheavier & Gofile)
-### V2.0 Cloud Edition with Free GitHub Database & Anya-Style Control Panel
+<p align="center">
+  <img src="icon.png" width="180" height="180" alt="tDownUp Logo" style="border-radius: 24px;">
+</p>
 
-An enterprise-grade Telegram Bot built with Python (`pyTelegramBotAPI`) and Node.js (`WebTorrent`) that converts BitTorrent magnet links and `.torrent` files into direct high-speed download links on **[Buzzheavier.com](https://buzzheavier.com)** and **[Gofile.io](https://gofile.io)** in real-time with **0 BYTES written to the server/RDP hard disk!**
+<h1 align="center">⚡ tDownUp</h1>
+
+<p align="center">
+  <b>High-Speed Torrent & Magnet to Direct Cloud Uploader Telegram Bot</b><br>
+  <i>Convert BitTorrent links into direct download links on Buzzheavier and Gofile instantly!</i>
+</p>
 
 ---
 
-## ⚡ Zero-Disk Pure RAM Streaming Architecture
+## 📖 What is tDownUp?
 
-Conventional torrent bots download entire files (often 10GB–50GB+) onto the server disk before uploading them to cloud hosts. This consumes massive disk space, wears out SSDs, and doubles transfer times.
+**tDownUp** is an ultra-fast Telegram Bot built with Python (`pyTelegramBotAPI`) and Node.js (`WebTorrent`) that allows users to send any `.torrent` file or magnet link and receive direct high-speed download links on **[Buzzheavier.com](https://buzzheavier.com)** or **[Gofile.io](https://gofile.io)**.
 
-This bot transforms your server or RDP into a **direct in-memory network conduit**:
+---
+
+## 📥 How to Use
+
+Using **tDownUp** is simple and intuitive:
+
+1. **Send a Torrent**:
+   - Send `/dw <magnet_link>`
+   - Or paste any magnet link directly (`magnet:?xt=...`)
+   - Or upload a `.torrent` file directly
+   - Or reply to any `.torrent` file with `/dw`
+
+2. **Select Files**:
+   - The bot reads the torrent contents and presents an interactive file checklist.
+   - Tap any file to toggle it on (`✅`) or off (`❌`).
+   - Use **`Select All`** or **`Deselect All`** for fast selection.
+
+3. **Choose Destination**:
+   - Tap **`🐝 Buzzheavier`** or **`📁 Gofile.io`**.
+
+4. **Get Direct Links**:
+   - Watch the live progress dashboard.
+   - When finished, click your direct download links!
+   - Tap **`☕ Support & Donate`** to support server hosting and development.
+
+---
+
+## ✨ Features & Architecture
+
+### 🐙 Token-Based Cloud Database (GitHub Contents API)
+- **Zero local `config.json`**: All settings and user data sync in real-time to a private, versioned GitHub database (`database.json`).
+- **Gatekeeper Protection:** The bot remains locked in safe **Admin Only Mode** until a valid GitHub token is provided in settings.
+- **Instant Sync:** User registrations, download counters, and channel settings commit immediately to your GitHub cloud storage.
+
+### ⚙️ Covert Admin Control Panel (`/settings` or `/panel`)
+Hidden from regular users and accessible only by the configured `ADMIN_ID`:
+- **🐙 Database:** Connect, update, test, or refresh your GitHub Database Token and URL.
+- **📢 Channels:** Configure Bot Channel (force subscription), Invite Link, Results Channel (completed uploads feed), and Error Channel.
+- **☕ Donation Settings:** Set up PayPal, Binance Pay ID, and RedotPay-supported crypto networks:
+  - 🔴 Tron (TRC20 USDT)
+  - 🟡 BNB Smart Chain (BEP20)
+  - 🟣 Solana (SOL)
+  - 💎 The Open Network (TON)
+  - 🔷 Ethereum (ERC20)
+  - 🔵 Arbitrum One
+  - 🟡 opBNB
+- **👥 Members:** Search users by ID or username, view profiles, ban/unban, and reset daily quotas.
+- **⏱️ Quotas & Limits:** Configure daily link limits and max file sizes applied equally to all registered users.
+- **📢 Broadcast:** Send announcements to all registered users simultaneously.
+
+### 🎨 Clean User Experience
+- No internal server jargon or confusing technical descriptions in chat.
+- Transparent progress bar with transfer rate, ETA, and active peer count.
+- Dynamic contact info to reach the bot owner for help.
+
+---
+
+## 📦 Standalone Executable (`tDownUp.exe`)
+
+The entire project (Python runtime, Node.js, Aria2c, WebTorrent engine, packages, and custom icon) compiles into a **single standalone file**:
 
 ```text
-┌──────────────────┐         Pure RAM Stream          ┌───────────────────────┐
-│ BitTorrent Swarm │ ───────────────────────────────► │ RDP Memory (RAM Only) │
-└──────────────────┘                                  └───────────────────────┘
-                                                                  │
-                                                      Real-time HTTP Stream
-                                                                  │
-                                                                  ▼
-                                                      ┌───────────────────────┐
-                                                      │ Buzzheavier / Gofile  │
-                                                      └───────────────────────┘
-                                                                  ▲
-                                                      [ Disk Usage = 0 Bytes ]
+dist/tDownUp.exe
 ```
 
-- **Simultaneous Transfer:** Data is downloaded from peers and uploaded to the destination at the exact same millisecond.
-- **Zero Disk Footprint:** Pieces reside exclusively in RAM, are piped to the remote HTTP socket, and are immediately freed from memory.
-- **Extreme Speed:** No disk I/O bottlenecks.
-- **Auto-Cleanup:** Torrent metadata files (`.torrent`, `.aria2`) are automatically purged upon transfer completion or cancellation.
-
----
-
-## ✨ Key Features
-
-### 🐙 Free Token-Based Cloud Database (GitHub Contents API)
-- **No local `config.json`**: All operational configurations and user records reside in memory and sync automatically to a secure, free GitHub repository (`database.json`).
-- **Gatekeeper Constraint:** The bot cannot be switched to **Public** or **Premium** mode without a valid connected GitHub Database Token! It stays locked in safe **Admin Only** mode until the database is linked.
-- **Real-Time Sync:** Every user registration, daily download increment, quota reset, tier change, or settings update immediately commits to your GitHub database.
-- **Auto-Provisioning:** Simply enter your GitHub Personal Access Token in `/settings` → the bot automatically creates the private repository and initializes `database.json` for you!
-
-### ⚙️ Anya-Style Interactive Control Panel (`/settings` or `/panel`)
-All configuration adjustments utilize **in-place message editing** and **reply-based inputs** (just like Anya Bot):
-- **🐙 Database (GitHub):**
-  - Add / Update / Test / Remove GitHub Token.
-  - Edit remote Database URL.
-  - Test Database connection & live sync.
-  - Reset remote user database.
-  - Step-by-step token generation help guide.
-- **📢 Channels Configuration:**
-  - 🤖 **Bot Channel:** Channel required for force-subscription registration.
-  - 🔗 **Invite Link:** Public invite link for users to join.
-  - ✅ **Results Channel:** Automatically broadcasts a rich success card whenever a torrent finishes streaming (File Name, Size, Host, Direct Download URL, Uploader).
-  - ❌ **Error Channel:** Automatically broadcasts error alert cards whenever a stream fails.
-  - 🧪 Built-in **Test Buttons** for all channels to verify bot administrator permissions.
-- **☕ Donation Settings & Multi-Network Support:**
-  - Dedicated **`☕ Support & Donate`** button appended to every completed transfer message.
-  - Configurable payment options in `/settings`:
-    - 🅿️ **PayPal**
-    - 🟡 **Binance Pay ID**
-    - 🔴 **USDT (TRC20)**
-    - 🟡 **BNB Smart Chain (BEP20)**
-    - 🟣 **Solana (SOL)**
-    - 💎 **The Open Network (TON)**
-    - 🔷 **Ethereum (ERC20)**
-    - 🔵 **Arbitrum One**
-    - 🟡 **opBNB**
-    - 📝 **Custom Donation Note**
-- **👥 Members Management:**
-  - Database overview (Total users, Banned users, Today's active count).
-  - Paginated user directory (`All Members`, `Banned`) with ◀️ Prev / Next ▶️ buttons.
-  - **Search User:** Instant lookup by numerical Telegram ID or `@username`.
-  - **User Profile View:** View user's registration date, today's usage, and total downloads.
-  - Quick action buttons: `🚫 Ban / Unban User`, `🔄 Reset Daily Quota`.
-- **🔐 Access Modes:**
-  - `Admin Only Mode` (safe maintenance mode).
-  - `Public Mode` (open to all registered users).
-- **⏱️ Quotas & Limits:**
-  - Standardized limits applied equally to all members:
-    - Daily download links limit (default: 5 links/day).
-    - Maximum torrent file size in GB (default: 40 GB).
-- **📢 Global Broadcast:** Send instant announcements to all registered users simultaneously.
-- **🤫 Covert Admin Controls & Dynamic Owner Contact:**
-  - `/settings` is entirely invisible in `/start` and `/help` to keep the user experience clean.
-  - Owner contact info is dynamically fetched from the Telegram API via `ADMIN_ID` and displayed for assistance.
-
-### 🎯 Interactive File Selection & Dual Destinations
-- Parse any torrent magnet link or `.torrent` file.
-- View all contained files with file sizes.
-- Interactive inline buttons (`✅` / `❌`) to pick exactly which files you want.
-- Batch actions: **`Select All`** and **`Deselect All`**.
-- Multi-page navigation for torrents with dozens or hundreds of files.
-- Choose your preferred upload provider with one click before downloading:
-  - **Buzzheavier.com** (Instant direct streaming, fast CDN)
-  - **Gofile.io** (High-speed unlimited storage server)
-
-### 📊 Real-Time Telegram Progress Dashboard
-- Visual animated progress bar: `[████████░░] 80.0%`
-- Transferred size / Total file size
-- Real-time download & upload speeds
-- Estimated Time of Arrival (ETA)
-- Active BitTorrent peer swarm count
-- Real-time disk usage indicator (`0 B - Direct RAM Relay`)
-- **🛑 Stop:** Dedicated inline button to instantly cancel the transfer at any moment.
-
----
-
-## 📁 Project Structure
-
-```text
-├── bot.py                  # Main Telegram bot logic, settings menus & event router
-├── config.py               # Minimal local authentication (.auth) & terminal styling
-├── database.py             # Cloud Database Manager with GitHub real-time sync
-├── github_client.py        # Centralized GitHub API client (token test, CRUD on database.json)
-├── stream_manager.py       # Python-to-Node subprocess manager & event bridge
-├── streamer.mjs            # High-performance WebTorrent RAM streaming engine
-├── torrent_manager.py      # Aria2 metadata extractor & torrent parser
-├── utils.py                # Formatting helpers (sizes, ETA, progress bars)
-├── aria2c.exe              # Bundled standalone Aria2 engine for metadata extraction
-├── build_exe.py            # PyInstaller single-file standalone compiler
-├── build.bat               # One-click Windows build script
-└── run.bat                 # One-click execution launcher
-```
-
----
-
-## 🚀 Quick Start (Running from Source)
-
-### 1. Prerequisites
-- **Python 3.10+**
-- **Node.js 18+**
-
-### 2. Install Dependencies
-```bash
-pip install -r requirements.txt
-npm install
-```
-
-### 3. Run the Bot
-```bash
-python bot.py
-```
-On first launch, if credentials are not configured, the console will interactively prompt for:
-1. **Telegram Bot Token** (from `@BotFather`)
-2. **Admin Chat ID** (your numeric ID from `@userinfobot`)
-
-Credentials are saved in a protected `.auth` file. No `config.json` or `.env` needed!
-
----
-
-## 📦 Building Standalone Single Executable (`.exe`)
-
-To package everything (Python, WebTorrent, Aria2, and dependencies) into a single standalone `.exe` that runs on any Windows machine:
-
+### Build Instructions:
 ```bash
 python build_exe.py
 ```
 Or simply double-click `build.bat`.
 
-The resulting standalone executable will be located at:
-```text
-dist/TorrentStreamBot.exe
-```
-You can move this single `.exe` file to any Windows computer or RDP without installing Python or Node.js!
-
----
-
-## 🛡️ Crash Protection & Console Experience
-
-Inspired by Anya Bot, the terminal window features:
-- **ANSI Color Status Dashboard:** Displays bot name, username, ID, Admin ID, Bot Mode, Cloud DB status, and registered members at a glance.
-- **Auto-Reconnect & Crash Immunity:** If Telegram polling experiences network timeouts or disconnects, it logs the exception, waits 5 seconds, and automatically reconnects without ever closing the CMD window!
+You can move `tDownUp.exe` alone to any Windows computer or RDP without installing Python, Node.js, or Aria2!
