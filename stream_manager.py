@@ -7,6 +7,8 @@ import glob
 import zipfile
 import subprocess
 import threading
+from typing import Optional, Callable
+from torrentool.api import Torrent
 from config import BASE_DIR, BUNDLE_DIR
 from database import db
 
@@ -229,9 +231,15 @@ class StreamManager:
 
         return False, error_msg or "Transfer finished without returning a URL."
 
-    def fetch_magnet_metadata(self, magnet_link: str, output_path: str, timeout: int = 45) -> tuple[bool, str]:
+    def fetch_magnet_metadata(
+        self,
+        magnet_link: str,
+        output_path: str,
+        timeout: int = 60,
+        status_callback: Optional[Callable[[int, int], None]] = None
+    ) -> tuple[bool, str]:
         """
-        Fast WebTorrent fallback to fetch magnet metadata and write .torrent file.
+        Fetch magnet metadata and write .torrent file using WebTorrent engine.
         Returns:
             (True, output_path) or (False, error_message)
         """
@@ -267,12 +275,81 @@ class StreamManager:
                 env=env,
                 creationflags=creationflags,
             )
-            stdout_data, stderr_data = proc.communicate(timeout=timeout)
-            if proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                return True, output_path
-            return False, stderr_data.strip() or "WebTorrent could not resolve metadata within timeout."
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            return False, "WebTorrent metadata resolution timed out."
         except Exception as e:
-            return False, str(e)
+            return False, f"Failed to start metadata resolver: {e}"
+
+        start_time = time.time()
+        last_callback_time = 0.0
+        error_msg = None
+
+        while True:
+            elapsed = int(time.time() - start_time)
+            if elapsed > timeout:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return False, "Could not fetch torrent metadata within timeout. Check peers/trackers."
+
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+                continue
+
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                data = json.loads(line)
+                dtype = data.get("type")
+                if dtype == "meta_progress":
+                    peers = data.get("peers", 0)
+                    now = time.time()
+                    if status_callback and (now - last_callback_time >= 1.5):
+                        last_callback_time = now
+                        status_callback(peers, elapsed)
+                elif dtype == "metadata_done":
+                    break
+                elif dtype == "error":
+                    error_msg = data.get("message")
+            except json.JSONDecodeError:
+                pass
+
+        proc.poll()
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return True, output_path
+
+        stderr_out = proc.stderr.read().strip()
+        return False, error_msg or stderr_out or "Failed to resolve torrent metadata."
+
+def parse_torrent(torrent_path: str) -> tuple[str, int, list[dict]]:
+    """
+    Parse .torrent file to extract torrent name, total size, and list of files.
+    Pure Python using torrentool - 100% cross-platform (Windows, Linux, macOS).
+    """
+    t = Torrent.from_file(torrent_path)
+    name = t.name
+    total_size = t.total_size
+    file_list = []
+
+    if not t.files:
+        file_list.append({"index": 1, "name": name, "length": total_size})
+    else:
+        for idx, f in enumerate(t.files, 1):
+            clean_name = f.name
+            if "\\" in clean_name:
+                clean_name = clean_name.split("\\")[-1]
+            elif "/" in clean_name:
+                clean_name = clean_name.split("/")[-1]
+
+            file_list.append({
+                "index": idx,
+                "name": clean_name or f.name,
+                "full_name": f.name,
+                "length": f.length,
+            })
+
+    return name, total_size, file_list

@@ -1,7 +1,7 @@
 {
   "name": "turrent-bot",
   "version": "1.0.0",
-  "description": "An advanced, high-performance Telegram Bot built with Python (`pyTelegramBotAPI`) and `aria2c` that allows users to send Torrent magnet links or `.torrent` files, interactively choose which files to download using Telegram inline buttons, and upload them directly to [Buzzheavier](https://buzzheavier.com) with **zero permanent storage footprint** on the RDP server.",
+  "description": "An advanced, high-performance Telegram Bot built with Python (`pyTelegramBotAPI`) and WebTorrent that allows users to send Torrent magnet links or `.torrent` files, interactively choose which files to download using Telegram inline buttons, and transfer them directly to Buzzheavier or Gofile with **zero permanent storage footprint**.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

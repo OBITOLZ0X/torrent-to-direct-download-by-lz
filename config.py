@@ -186,33 +186,5 @@ AUTH_DATA = load_or_prompt_auth()
 BOT_TOKEN = AUTH_DATA.get("bot_token", "")
 ADMIN_ID = AUTH_DATA.get("admin_id", 0)
 
-ARIA2_PORT = 6800
-ARIA2_RPC_SECRET = ""
-ARIA2_RPC_URL = f"http://localhost:{ARIA2_PORT}/jsonrpc"
 PROGRESS_UPDATE_INTERVAL = 2.5
 FILES_PER_PAGE = 8
-
-def find_aria2_executable() -> str:
-    """Locate the aria2c executable across common installation paths."""
-    # Check system PATH
-    which_path = shutil.which("aria2c") or shutil.which("aria2c.exe")
-    if which_path:
-        return which_path
-
-    # Check current directory & bundle directory
-    for test_dir in [BASE_DIR, BUNDLE_DIR]:
-        local_exe = os.path.join(test_dir, "aria2c.exe")
-        if os.path.exists(local_exe):
-            return local_exe
-
-    # Check Windows WinGet directory
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    if local_app_data:
-        pattern = os.path.join(local_app_data, "Microsoft", "WinGet", "Packages", "**", "aria2c.exe")
-        matches = glob.glob(pattern, recursive=True)
-        if matches:
-            return matches[0]
-
-    return "aria2c"
-
-ARIA2_PATH = find_aria2_executable()

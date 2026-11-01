@@ -29,7 +29,6 @@ from config import (
     METADATA_DIR,
     PROGRESS_UPDATE_INTERVAL,
     FILES_PER_PAGE,
-    ARIA2_PORT,
     CYAN,
     GREEN,
     YELLOW,
@@ -47,8 +46,7 @@ from utils import (
     truncate_text,
     safe_remove,
 )
-from torrent_manager import Aria2Manager
-from stream_manager import StreamManager, StreamController
+from stream_manager import StreamManager, StreamController, parse_torrent
 from database import db
 from github_client import GitHubClient
 
@@ -169,7 +167,6 @@ try:
                     raise
     bot.send_message = _safe_send_message_wrapper
 
-    aria2 = Aria2Manager()
     stream_mgr = StreamManager()
 except Exception as init_err:
     print(f"\n{RED}[!] CRITICAL INITIALIZATION ERROR: {init_err}{RESET}")
@@ -309,9 +306,6 @@ def cleanup_torrent_file(filepath: Optional[str]):
     try:
         if os.path.exists(filepath):
             os.remove(filepath)
-        aria_control = filepath + ".aria2"
-        if os.path.exists(aria_control):
-            os.remove(aria_control)
     except Exception as e:
         print(f"[Cleanup] Error removing {filepath}: {e}")
 
@@ -859,17 +853,18 @@ def process_torrent_source(message: types.Message, magnet_link: str = None, torr
             with open(torrent_filepath, "wb") as f:
                 f.write(torrent_bytes)
         elif magnet_link:
+            target_path = os.path.join(METADATA_DIR, f"{session_id}.torrent")
             def on_meta_status(peers: int, elapsed: int):
                 safe_edit_message(
                     chat_id,
                     status_msg.message_id,
                     f"🔍 <b>CONNECTING TO SWARM & FETCHING METADATA...</b>\n{SEP}\n"
                     f"<blockquote>👥 <b>Connected Peers:</b> <code>{peers}</code>\n"
-                    f"⏱️ <b>Elapsed:</b> <code>{elapsed}s / 80s</code></blockquote>\n{SEP}\n"
+                    f"⏱️ <b>Elapsed:</b> <code>{elapsed}s / 60s</code></blockquote>\n{SEP}\n"
                     f"<i>Searching DHT network and global trackers for torrent headers...</i>"
                 )
 
-            ok, res = aria2.fetch_magnet_metadata(magnet_link, timeout=80, status_callback=on_meta_status)
+            ok, res = stream_mgr.fetch_magnet_metadata(magnet_link, output_path=target_path, timeout=60, status_callback=on_meta_status)
             if not ok:
                 safe_edit_message(
                     chat_id,
@@ -883,7 +878,7 @@ def process_torrent_source(message: types.Message, magnet_link: str = None, torr
             safe_edit_message(chat_id, status_msg.message_id, "❌ No torrent data provided.")
             return
 
-        t_name, t_size, files = aria2.parse_torrent(torrent_filepath)
+        t_name, t_size, files = parse_torrent(torrent_filepath)
         if not files:
             safe_edit_message(chat_id, status_msg.message_id, "❌ No files found inside this torrent.")
             cleanup_torrent_file(torrent_filepath)
@@ -2477,11 +2472,6 @@ def main():
         bot_info = None
 
     print_anya_banner(bot_info)
-
-    try:
-        aria2.start_aria2_daemon()
-    except Exception as e:
-        print(f"{YELLOW}[!] Notice starting Aria2 daemon: {e}{RESET}")
 
     restart_count = 0
     while True:

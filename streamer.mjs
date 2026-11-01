@@ -69,24 +69,44 @@ if (fs.existsSync(source)) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Mode 1: Fast WebTorrent Metadata Resolver Fallback
+// Mode 1: Fast WebTorrent Metadata Resolver
 // ─────────────────────────────────────────────────────────────
 if (getMetadata) {
-    console.log(JSON.stringify({ type: 'status', message: 'Resolving magnet metadata with WebTorrent engine...' }));
     const metaClient = new WebTorrent({
         dht: true,
         maxConns: 120,
     });
 
+    let isDone = false;
+
     const timeoutTimer = setTimeout(() => {
+        if (isDone) return;
+        isDone = true;
+        clearInterval(statusInterval);
         console.error(JSON.stringify({
             type: 'error',
-            message: 'WebTorrent metadata fetch timed out. Check seeders/trackers.'
+            message: 'Could not fetch torrent metadata within timeout. Check peers/trackers.'
         }));
         metaClient.destroy(() => process.exit(1));
-    }, 45000);
+    }, 60000);
 
-    metaClient.add(torrentInput, { announce: extraTrackers }, (torrent) => {
+    const torrent = metaClient.add(torrentInput, { announce: extraTrackers });
+
+    const statusInterval = setInterval(() => {
+        if (isDone) {
+            clearInterval(statusInterval);
+            return;
+        }
+        console.log(JSON.stringify({
+            type: 'meta_progress',
+            peers: torrent.numPeers || 0
+        }));
+    }, 1000);
+
+    torrent.on('metadata', () => {
+        if (isDone) return;
+        isDone = true;
+        clearInterval(statusInterval);
         clearTimeout(timeoutTimer);
         try {
             if (outputPath) {
@@ -96,7 +116,7 @@ if (getMetadata) {
                 type: 'metadata_done',
                 name: torrent.name,
                 total_size: torrent.length,
-                files_count: torrent.files.length,
+                files_count: torrent.files ? torrent.files.length : 1,
                 output_path: outputPath
             }));
             metaClient.destroy(() => process.exit(0));
@@ -106,9 +126,21 @@ if (getMetadata) {
         }
     });
 
-    metaClient.on('error', (err) => {
+    torrent.on('error', (err) => {
+        if (isDone) return;
+        isDone = true;
+        clearInterval(statusInterval);
         clearTimeout(timeoutTimer);
-        console.error(JSON.stringify({ type: 'error', message: err.message }));
+        console.error(JSON.stringify({ type: 'error', message: `Torrent error: ${err.message}` }));
+        metaClient.destroy(() => process.exit(1));
+    });
+
+    metaClient.on('error', (err) => {
+        if (isDone) return;
+        isDone = true;
+        clearInterval(statusInterval);
+        clearTimeout(timeoutTimer);
+        console.error(JSON.stringify({ type: 'error', message: `WebTorrent client error: ${err.message}` }));
         metaClient.destroy(() => process.exit(1));
     });
 } else {

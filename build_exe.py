@@ -56,8 +56,6 @@ def build():
         "--add-data",
         f"package.json{os.pathsep}.",
         "--add-data",
-        f"aria2c.exe{os.pathsep}.",
-        "--add-data",
         f"node_modules.zip{os.pathsep}.",
     ]
 
@@ -101,7 +99,7 @@ def build():
         print("\n" + "=" * 60)
         print("  BUILD SUCCESSFUL!")
         print(f"  Single Standalone Executable created at: {dist_exe}")
-        print("  Everything (Python, Node.js, Aria2, Transfer Core, Icon) is bundled inside this ONE file!")
+        print("  Everything (Python, Node.js, Transfer Core, Icon) is bundled inside this ONE file!")
         print("=" * 60)
     else:
         print("\n[!] Build completed. Check 'dist' folder.")
