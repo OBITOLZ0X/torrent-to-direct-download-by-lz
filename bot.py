@@ -647,14 +647,14 @@ def run_stream_pipeline(session_id: str, destination: str):
                 is_p = session.get("is_paused", False) or ev.get("isPaused", False)
 
                 status_title = "⏸️ <b>STREAM PAUSED</b>" if is_p else f"{EMOJI_STREAM_UP} <b>STREAMING IN PROGRESS</b>"
-                footer = "<i>⏸️ Stream is paused. Tap <b>Continue</b> below to resume.</i>" if is_p else f"<i>{EMOJI_SPEED} Streaming directly to {dest_display}...</i>"
+                footer = "<i>⏸️ Stream is paused. Tap <b>Continue</b> below to resume.</i>" if is_p else "<i>⚡ Direct live transfer in progress...</i>"
 
                 text = (
                     f"{status_title}\n"
                     f"{SEP}\n"
                     f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                     f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
-                    f"{EMOJI_GLOBE} <b>Destination:</b> <b>{dest_display}</b></blockquote>\n"
+                    f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
                     f"{SEP}\n"
                     f"<code>{progress_bar(pct)}</code>\n"
                     f"{SEP}\n"
@@ -674,9 +674,9 @@ def run_stream_pipeline(session_id: str, destination: str):
                 f"{EMOJI_STREAM_DOWN} <b>CONNECTING TO BITTORRENT SWARM...</b>\n"
                 f"{SEP}\n"
                 f"<blockquote>📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
-                f"{EMOJI_GLOBE} <b>Destination:</b> <b>{dest_display}</b></blockquote>\n"
+                f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
                 f"{SEP}\n"
-                f"<i>{EMOJI_SPEED} Establishing peer connections and starting stream...</i>"
+                f"<i>⚡ Establishing peer connections and starting stream...</i>"
             )
             session["last_rendered_text"] = init_text
             safe_edit_message(
@@ -789,13 +789,13 @@ def run_stream_pipeline(session_id: str, destination: str):
                 f"{EMOJI_CHECK} <b>DOWNLOAD & STREAM COMPLETED!</b>\n"
                 f"{SEP}\n"
                 f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                f"{EMOJI_GLOBE} <b>Cloud Host:</b> <b>{dest_display}</b>\n"
+                f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
                 f"📦 <b>Files Streamed:</b> <code>{len(uploaded_results)} file(s)</code></blockquote>\n"
                 f"{SEP}\n"
                 f"{EMOJI_LINK} <b>DIRECT DOWNLOAD LINKS:</b>\n"
                 f"{links_section}"
                 f"{SEP}\n"
-                f"{EMOJI_SPARK} <i>Tap the link above to start high-speed downloading. Support our servers below:</i>"
+                f"<i>💡 Tap any link above to start high-speed downloading. Support our servers below:</i>"
             )
             # Add Donate Button below completion message
             done_kb = types.InlineKeyboardMarkup()
@@ -808,17 +808,18 @@ def run_stream_pipeline(session_id: str, destination: str):
                 try:
                     total_uploaded_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
                     total_sz_str = human_readable_size(total_uploaded_bytes)
+                    user_tag = f"@{user_name}" if user_name and user_name != "user" else f"User {user_id}"
+
                     res_card = (
-                        f"{EMOJI_FIRE} <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
+                        f"🎉 <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
                         f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                        f"{EMOJI_USER} <b>Uploaded By:</b> @{user_name} (<code>{user_id}</code>)\n"
-                        f"{EMOJI_GLOBE} <b>Host:</b> {dest_display}\n"
-                        f"📦 <b>Files Count:</b> <code>{len(uploaded_results)} file(s)</code> (<code>{total_sz_str}</code>)</blockquote>\n"
+                        f"📦 <b>Total Size:</b> <code>{total_sz_str}</code> (<code>{len(uploaded_results)} files</code>)\n"
+                        f"🌐 <b>Host:</b> <b>{dest_display}</b>\n"
+                        f"👤 <b>Uploaded By:</b> {html.escape(user_tag)}</blockquote>\n"
                         f"{SEP}\n"
-                        f"{EMOJI_LINK} <b>DOWNLOAD LINKS:</b>\n"
+                        f"🔗 <b>DOWNLOAD LINKS:</b>\n"
                         f"{links_section}"
-                        f"{SEP}\n"
-                        f"{EMOJI_SPARK} <i>Uploaded via tDownUp Bot V2</i>"
+                        f"{SEP}"
                     )
                     bot.send_message(res_channel, res_card, disable_web_page_preview=False)
                 except Exception as ce:
