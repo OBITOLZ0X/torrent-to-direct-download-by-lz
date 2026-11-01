@@ -599,22 +599,6 @@ def run_stream_pipeline(session_id: str, destination: str):
 
             uploaded_results.append((fname, result, fsize_str, fsize))
 
-            res_channel = db.get_setting("results_channel", "").strip()
-            if res_channel:
-                try:
-                    res_card = (
-                        f"{EMOJI_FIRE} <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
-                        f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
-                        f"📦 <b>Size:</b> <code>{fsize_str}</code>\n"
-                        f"{EMOJI_GLOBE} <b>Host:</b> {dest_display}\n"
-                        f"{EMOJI_LINK} <b>Link:</b> <a href=\"{result}\">Download File</a>\n"
-                        f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)</blockquote>\n"
-                        f"{SEP}"
-                    )
-                    bot.send_message(res_channel, res_card, disable_web_page_preview=False)
-                except Exception as ce:
-                    print(f"[ResultsChannel] Failed to send: {ce}")
-
         # Record download usage in database
         if not cancel_event.is_set() and uploaded_results:
             db.record_download_success(user_id, ADMIN_ID)
@@ -650,6 +634,28 @@ def run_stream_pipeline(session_id: str, destination: str):
             done_kb = types.InlineKeyboardMarkup()
             done_kb.add(types.InlineKeyboardButton("☕ Support & Donate", callback_data="pub_show_donation"))
             safe_edit_message(chat_id, message_id, done_text, reply_markup=done_kb)
+
+            # Broadcast ALL streamed files from this torrent together in ONE message to Results Channel
+            res_channel = db.get_setting("results_channel", "").strip()
+            if res_channel:
+                try:
+                    total_uploaded_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
+                    total_sz_str = human_readable_size(total_uploaded_bytes)
+                    res_card = (
+                        f"{EMOJI_FIRE} <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
+                        f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                        f"{EMOJI_USER} <b>Uploaded By:</b> @{user_name} (<code>{user_id}</code>)\n"
+                        f"{EMOJI_GLOBE} <b>Host:</b> {dest_display}\n"
+                        f"📦 <b>Files Count:</b> <code>{len(uploaded_results)} file(s)</code> (<code>{total_sz_str}</code>)</blockquote>\n"
+                        f"{SEP}\n"
+                        f"{EMOJI_LINK} <b>DOWNLOAD LINKS:</b>\n"
+                        f"{links_section}"
+                        f"{SEP}\n"
+                        f"{EMOJI_SPARK} <i>Uploaded via tDownUp Bot V2</i>"
+                    )
+                    bot.send_message(res_channel, res_card, disable_web_page_preview=False)
+                except Exception as ce:
+                    print(f"[ResultsChannel] Failed to send combined card: {ce}")
 
     finally:
         cleanup_torrent_file(torrent_path)
