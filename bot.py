@@ -23,6 +23,8 @@ from telebot.apihelper import ApiTelegramException
 from config import (
     BOT_TOKEN,
     ADMIN_ID,
+    AUTH_DATA,
+    AUTH_FILE,
     METADATA_DIR,
     PROGRESS_UPDATE_INTERVAL,
     FILES_PER_PAGE,
@@ -88,6 +90,7 @@ admin_pending: Dict[int, dict] = {}
 
 # Cached admin contact string
 _admin_contact_cache: Optional[str] = None
+_admin_username_cache: Optional[str] = None
 
 def get_admin_contact() -> str:
     """Dynamically retrieve admin username or mention from Telegram API using ADMIN_ID."""
@@ -105,6 +108,40 @@ def get_admin_contact() -> str:
     except Exception:
         pass
     return f'<a href="tg://user?id={ADMIN_ID}">the Owner</a>'
+
+def get_admin_username() -> str:
+    """Retrieve admin username (e.g. @OBITOLZ) for console and status displays."""
+    global _admin_username_cache
+    if _admin_username_cache:
+        return _admin_username_cache
+
+    saved = AUTH_DATA.get("admin_username")
+    if saved:
+        _admin_username_cache = saved
+        return _admin_username_cache
+
+    try:
+        chat = bot.get_chat(ADMIN_ID)
+        if chat and chat.username:
+            _admin_username_cache = f"@{chat.username}"
+            try:
+                if os.path.exists(AUTH_FILE):
+                    with open(AUTH_FILE, "r", encoding="utf-8") as f:
+                        cur_auth = json.load(f)
+                    cur_auth["admin_username"] = _admin_username_cache
+                    with open(AUTH_FILE, "w", encoding="utf-8") as f:
+                        json.dump(cur_auth, f, indent=2)
+            except Exception:
+                pass
+            return _admin_username_cache
+        elif chat and chat.first_name:
+            _admin_username_cache = chat.first_name
+            return _admin_username_cache
+    except Exception:
+        pass
+
+    _admin_username_cache = str(ADMIN_ID)
+    return _admin_username_cache
 
 def safe_edit_message(chat_id: int, message_id: int, text: str, reply_markup=None):
     """Safely edit message text handling rate limits and unmodified text."""
@@ -590,9 +627,10 @@ def render_settings_main() -> tuple[str, types.InlineKeyboardMarkup]:
     else:
         db_icon = "🔴 Not Set (Locked to Admin Only)"
 
+    admin_tag = get_admin_username()
     text = (
         f"⚙️ <b>ADMIN CONTROL PANEL</b>\n{SEP}\n"
-        f"<blockquote>👑 <b>Admin ID:</b> <code>{ADMIN_ID}</code>\n"
+        f"<blockquote>👑 <b>Admin:</b> <code>{admin_tag}</code>\n"
         f"🤖 <b>Bot Mode:</b> <code>{bot_mode.upper()}</code>\n"
         f"🐙 <b>Cloud DB:</b> <code>{db_icon}</code>\n"
         f"👥 <b>Users:</b> <code>{stats['total_users']}</code> (🚫 <code>{stats['banned_users']}</code>)\n"
@@ -1902,6 +1940,7 @@ def print_anya_banner(bot_info):
     bot_id = str(bot_info.id) if bot_info else "N/A"
     stats = db.get_stats()
     mode = stats.get("bot_mode", "public").upper()
+    admin_display = get_admin_username()
 
     top_border = f"{CYAN}+{'-' * (width - 2)}+{RESET}"
     sep_line   = f"{CYAN}|{'-' * (width - 2)}|{RESET}"
@@ -1912,15 +1951,17 @@ def print_anya_banner(bot_info):
         return f"{CYAN}|{RESET} {content}{' ' * max(0, pad)} {CYAN}|{RESET}"
 
     print("\n" + top_border)
-    title = f"{BOLD}{WHITE}             ⚡ tDownUp BOT (V2.0 CLOUD EDITION) ⚡{RESET}"
-    print(pad_line(title, 51))
+    raw_title = "⚡ tDownUp BOT V2 ⚡"
+    left_pad = (width - 4 - len(raw_title)) // 2
+    title_content = f"{BOLD}{WHITE}{' ' * left_pad}{raw_title}{RESET}"
+    print(pad_line(title_content, left_pad + len(raw_title)))
     print(sep_line)
 
     lines = [
         (f"  {CYAN}*{RESET} {BOLD}Bot Name:{RESET}    {GREEN}{bot_name}{RESET}", len(f"  * Bot Name:    {bot_name}")),
         (f"  {CYAN}*{RESET} {BOLD}Username:{RESET}    {GREEN}{bot_username}{RESET}", len(f"  * Username:    {bot_username}")),
         (f"  {CYAN}*{RESET} {BOLD}Bot ID:{RESET}      {WHITE}{bot_id}{RESET}", len(f"  * Bot ID:      {bot_id}")),
-        (f"  {CYAN}*{RESET} {BOLD}Admin ID:{RESET}    {YELLOW}{ADMIN_ID}{RESET}", len(f"  * Admin ID:    {ADMIN_ID}")),
+        (f"  {CYAN}*{RESET} {BOLD}Admin:{RESET}       {YELLOW}{admin_display}{RESET}", len(f"  * Admin:       {admin_display}")),
         (f"  {CYAN}*{RESET} {BOLD}Bot Mode:{RESET}    {MAGENTA}{mode}{RESET}", len(f"  * Bot Mode:    {mode}")),
         (f"  {CYAN}*{RESET} {BOLD}Hosts:{RESET}       {CYAN}Buzzheavier.com & Gofile.io{RESET}", len("  * Hosts:       Buzzheavier.com & Gofile.io")),
     ]
@@ -1936,7 +1977,8 @@ def print_anya_banner(bot_info):
 def main():
     """Main execution loop with crash protection and auto-reconnect."""
     if os.name == "nt":
-        os.system("title tDownUp Bot (Active)")
+        os.system("title tDownUp Bot V2 (Active)")
+    os.system("cls" if os.name == "nt" else "clear")
 
     try:
         bot_info = bot.get_me()
