@@ -26,7 +26,7 @@ class GitHubClient:
     def _headers(self) -> dict:
         headers = {
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "TorrentStreamBot"
+            "User-Agent": "tDownUpBot"
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -177,7 +177,7 @@ class GitHubClient:
                 # Create private repo
                 create_payload = {
                     "name": repo_name,
-                    "description": "Cloud Database for Torrent Stream Bot",
+                    "description": "Cloud Database for tDownUp Bot",
                     "private": True,
                     "auto_init": True
                 }

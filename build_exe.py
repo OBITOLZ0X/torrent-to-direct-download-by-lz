@@ -7,7 +7,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def build():
     print("=" * 60)
-    print("       Building Standalone TorrentStreamBot.exe        ")
+    print("           Building Standalone tDownUp.exe             ")
     print("=" * 60)
 
     # Ensure PyInstaller is installed
@@ -101,7 +101,7 @@ def build():
         print("\n" + "=" * 60)
         print("  BUILD SUCCESSFUL!")
         print(f"  Single Standalone Executable created at: {dist_exe}")
-        print("  Everything (Python, Node.js, Aria2, Streamer, Icon) is bundled inside this ONE file!")
+        print("  Everything (Python, Node.js, Aria2, Transfer Core, Icon) is bundled inside this ONE file!")
         print("=" * 60)
     else:
         print("\n[!] Build completed. Check 'dist' folder.")

@@ -174,7 +174,7 @@ class StreamManager:
             if controller:
                 controller.bind(proc)
         except Exception as e:
-            return False, f"Failed to start streaming process: {e}"
+            return False, f"Failed to start transfer process: {e}"
 
         result_url = None
         error_msg = None
@@ -189,7 +189,7 @@ class StreamManager:
                     proc.wait(timeout=2)
                 except Exception:
                     proc.kill()
-                return False, "Stream cancelled by user."
+                return False, "Transfer cancelled by user."
 
             line = proc.stdout.readline()
             if not line:
@@ -222,12 +222,12 @@ class StreamManager:
         proc.poll()
         if proc.returncode != 0 and not result_url:
             stderr_out = proc.stderr.read().strip()
-            return False, error_msg or stderr_out or "Streaming process exited unexpectedly."
+            return False, error_msg or stderr_out or "Transfer process exited unexpectedly."
 
         if result_url:
             return True, result_url
 
-        return False, error_msg or "Stream finished without returning a URL."
+        return False, error_msg or "Transfer finished without returning a URL."
 
     def fetch_magnet_metadata(self, magnet_link: str, output_path: str, timeout: int = 45) -> tuple[bool, str]:
         """

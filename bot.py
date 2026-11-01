@@ -482,9 +482,9 @@ def build_destination_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     return kb
 
 def build_streaming_keyboard(session_id: str, is_paused: bool = False) -> types.InlineKeyboardMarkup:
-    """Construct keyboard with Stop button during live streaming."""
+    """Construct keyboard with Stop button during live transfer."""
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("🛑 Stop Stream", callback_data=f"confirm_stop:{session_id}"))
+    kb.add(types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}"))
     return kb
 
 def build_stop_confirm_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
@@ -518,7 +518,7 @@ def render_selection_message(session_id: str) -> str:
         f"📑 <b>Total Files:</b> <code>{file_count}</code>\n"
         f"{EMOJI_CHECK} <b>Selected:</b> <code>{selected_count} files</code></blockquote>\n"
         f"{SEP}\n"
-        f"<i>Select the files you want to stream below using toggles.\n"
+        f"<i>Select the files you want to transfer below using toggles.\n"
         f"When ready, tap <b>Start Downloading</b>.</i>"
     )
 
@@ -578,11 +578,11 @@ def render_donation_card() -> str:
     text += "<i>💡 Tap any address or ID to copy it directly. Thank you for your support! 🙏</i>"
     return text
 
-# ================= Direct Live Stream Pipeline =================
+# ================= Direct Live Transfer Pipeline =================
 
 def run_stream_pipeline(session_id: str, destination: str):
     """
-    Direct Live Stream Relay:
+    Direct Live Transfer Relay:
     Downloads torrent chunks directly in RAM and concurrently pipes them straight to Buzzheavier or Gofile.
     Zero bytes are written to the local disk!
     """
@@ -638,7 +638,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 peers = ev.get("peers", 0)
 
                 text = (
-                    f"{EMOJI_STREAM_UP} <b>STREAMING IN PROGRESS</b>\n"
+                    f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>\n"
                     f"{SEP}\n"
                     f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                     f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
@@ -664,7 +664,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 f"<blockquote>📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
                 f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b></blockquote>\n"
                 f"{SEP}\n"
-                f"<i>⚡ Establishing peer connections and starting stream...</i>"
+                f"<i>⚡ Establishing peer connections and starting transfer...</i>"
             )
             session["last_rendered_text"] = init_text
             safe_edit_message(
@@ -706,7 +706,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                         f"⚠️ <b>Host:</b> {dest_display} connection dropped.\n"
                         f"🔄 <b>Auto-Retrying:</b> Attempt <code>{attempt + 2} of {max_retries + 1}</code>...</blockquote>\n{SEP}\n"
-                        f"<i>Re-establishing RAM stream pipe and resuming...</i>"
+                        f"<i>Re-establishing transfer pipe and resuming...</i>"
                     )
                     safe_edit_message(chat_id, message_id, retry_msg, reply_markup=build_streaming_keyboard(session_id))
                     time.sleep(3)
@@ -722,7 +722,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 safe_edit_message(
                     chat_id,
                     message_id,
-                    f"{EMOJI_ALERT} <b>STREAM ERROR</b>\n"
+                    f"{EMOJI_ALERT} <b>TRANSFER ERROR</b>\n"
                     f"{SEP}\n"
                     f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                     f"⚠️ <b>Reason:</b> <code>{html.escape(error_msg)}</code></blockquote>\n"
@@ -734,7 +734,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 if err_channel:
                     try:
                         err_card = (
-                            f"{EMOJI_ALERT} <b>STREAM ERROR LOG</b>\n{SEP}\n"
+                            f"{EMOJI_ALERT} <b>TRANSFER ERROR LOG</b>\n{SEP}\n"
                             f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                             f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
                             f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:200])}</code>\n"
@@ -755,10 +755,10 @@ def run_stream_pipeline(session_id: str, destination: str):
         # Final rendering
         if cancel_event.is_set():
             cancel_text = (
-                f"🛑 <b>STREAM CANCELLED</b>\n"
+                f"🛑 <b>TRANSFER CANCELLED</b>\n"
                 f"{SEP}\n"
                 f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                f"⚠️ <b>Status:</b> Stream cancelled by user request.</blockquote>\n"
+                f"⚠️ <b>Status:</b> Transfer cancelled by user request.</blockquote>\n"
                 f"{SEP}"
             )
             safe_edit_message(chat_id, message_id, cancel_text, reply_markup=None)
@@ -768,11 +768,11 @@ def run_stream_pipeline(session_id: str, destination: str):
                 links_section += f"<blockquote><b>{i}.</b> <a href=\"{url}\">{html.escape(fn)}</a> (<code>{sz}</code>)</blockquote>\n"
 
             done_text = (
-                f"{EMOJI_CHECK} <b>DOWNLOAD & STREAM COMPLETED!</b>\n"
+                f"{EMOJI_CHECK} <b>DOWNLOAD & TRANSFER COMPLETED!</b>\n"
                 f"{SEP}\n"
                 f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                 f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
-                f"📦 <b>Files Streamed:</b> <code>{len(uploaded_results)} file(s)</code></blockquote>\n"
+                f"📦 <b>Files Transferred:</b> <code>{len(uploaded_results)} file(s)</code></blockquote>\n"
                 f"{SEP}\n"
                 f"{EMOJI_LINK} <b>DIRECT DOWNLOAD LINKS:</b>\n"
                 f"{links_section}"
@@ -784,7 +784,7 @@ def run_stream_pipeline(session_id: str, destination: str):
             done_kb.add(types.InlineKeyboardButton("☕ Support & Donate", callback_data="pub_show_donation"))
             safe_edit_message(chat_id, message_id, done_text, reply_markup=done_kb)
 
-            # Broadcast ALL streamed files from this torrent together in ONE message to Results Channel
+            # Broadcast ALL transferred files from this torrent together in ONE message to Results Channel
             res_channel = db.get_setting("results_channel", "").strip()
             if res_channel:
                 try:
@@ -793,7 +793,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                     user_tag = f"@{user_name}" if user_name and user_name != "user" else f"User {user_id}"
 
                     res_card = (
-                        f"🎉 <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
+                        f"🎉 <b>TORRENT TRANSFER COMPLETED</b>\n{SEP}\n"
                         f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                         f"📦 <b>Total Size:</b> <code>{total_sz_str}</code> (<code>{len(uploaded_results)} files</code>)\n"
                         f"🌐 <b>Host:</b> <b>{dest_display}</b>\n"
@@ -1012,9 +1012,9 @@ def render_channels_menu() -> tuple[str, types.InlineKeyboardMarkup]:
         f"<blockquote><code>{bot_ch}</code></blockquote>\n"
         f"🔗 <b>INVITE LINK</b>\n"
         f"<blockquote><code>{inv_link}</code></blockquote>\n"
-        f"✅ <b>RESULTS CHANNEL (Successful Stream Broadcasts)</b>\n"
+        f"✅ <b>RESULTS CHANNEL (Successful Transfer Broadcasts)</b>\n"
         f"<blockquote><code>{res_ch}</code></blockquote>\n"
-        f"❌ <b>ERROR CHANNEL (Stream Error Reports)</b>\n"
+        f"❌ <b>ERROR CHANNEL (Transfer Error Reports)</b>\n"
         f"<blockquote><code>{err_ch}</code></blockquote>\n"
         f"{SEP}\n"
         f"<i>Configure or test channel integrations:</i>"
@@ -1303,7 +1303,7 @@ def render_start_text(user_id: int, user_name: str) -> str:
         f"{EMOJI_WAVE} <b>Welcome to tDownUp!</b>\n"
         f"{SEP}\n"
         f"<blockquote>{EMOJI_USER} <b>User:</b> {clean_name}\n"
-        f"{EMOJI_SPEED} <b>Engine:</b> <code>tDownUp Stream Core V2</code>\n"
+        f"{EMOJI_SPEED} <b>Engine:</b> <code>tDownUp Transfer Core V2</code>\n"
         f"{EMOJI_GLOBE} <b>Supported Hosts:</b> <code>Buzzheavier.com</code> & <code>Gofile.io</code></blockquote>\n"
         f"{SEP}\n"
         f"<b>tDownUp</b> allows you to download torrent files and magnet links directly to cloud storage at maximum speeds.\n\n"
@@ -2250,7 +2250,7 @@ def handle_callbacks(call: types.CallbackQuery):
             f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(session['torrent_name'])}</code>\n"
             f"📦 <b>Selected:</b> <code>{len(selected_files)} files</code> (<code>{human_readable_size(total_selected_size)}</code>)</blockquote>\n"
             f"{SEP}\n"
-            f"<i>Select the cloud storage service to stream your files to:</i>"
+            f"<i>Select the cloud storage service to transfer your files to:</i>"
         )
         safe_edit_message(sess_chat_id, sess_message_id, dest_text, reply_markup=dest_kb)
 
@@ -2262,7 +2262,7 @@ def handle_callbacks(call: types.CallbackQuery):
 
     elif action == "start":
         destination = parts[2] if len(parts) > 2 else "buzzheavier"
-        bot.answer_callback_query(call.id, f"🚀 Starting stream to {destination}...")
+        bot.answer_callback_query(call.id, f"🚀 Starting transfer to {destination}...")
         session["status"] = "running"
         threading.Thread(target=run_stream_pipeline, args=(session_id, destination), daemon=True).start()
 
@@ -2278,8 +2278,8 @@ def handle_callbacks(call: types.CallbackQuery):
                 f"🛑 <b>CONFIRM STOP</b>\n{SEP}\n"
                 f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(t_name)}</code>\n"
                 f"{file_line}"
-                f"⚠️ <b>Are you sure you want to stop the stream?</b></blockquote>\n{SEP}\n"
-                f"<i>Tap <b>Yes</b> to cancel completely, or <b>No</b> to return to the stream.</i>"
+                f"⚠️ <b>Are you sure you want to stop the transfer?</b></blockquote>\n{SEP}\n"
+                f"<i>Tap <b>Yes</b> to cancel completely, or <b>No</b> to return to the transfer.</i>"
             )
             safe_edit_message(
                 session["chat_id"],
@@ -2294,7 +2294,7 @@ def handle_callbacks(call: types.CallbackQuery):
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
         if session:
-            bot.answer_callback_query(call.id, "🛑 Stopping stream...")
+            bot.answer_callback_query(call.id, "🛑 Stopping transfer...")
             session["cancel_event"].set()
             ctrl = session.get("controller")
             if ctrl:
@@ -2306,7 +2306,7 @@ def handle_callbacks(call: types.CallbackQuery):
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
         if session:
-            bot.answer_callback_query(call.id, "↩️ Returned to stream.")
+            bot.answer_callback_query(call.id, "↩️ Returned to transfer.")
             last_text = session.get("last_rendered_text")
             if last_text:
                 safe_edit_message(
@@ -2319,7 +2319,7 @@ def handle_callbacks(call: types.CallbackQuery):
                 safe_edit_message(
                     session["chat_id"],
                     session["message_id"],
-                    f"⏸️ <b>STREAM PAUSED</b>\n{SEP}\n<i>Stream is paused. Tap <b>Continue</b> below to resume.</i>",
+                    f"⏸️ <b>TRANSFER PAUSED</b>\n{SEP}\n<i>Transfer is paused. Tap <b>Continue</b> below to resume.</i>",
                     reply_markup=build_streaming_keyboard(session_id, is_paused=True)
                 )
         else:

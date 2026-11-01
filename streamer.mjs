@@ -306,7 +306,7 @@ if (getMetadata) {
         });
 
         rawStream.on('error', (err) => {
-            console.error(JSON.stringify({ type: 'error', message: `Torrent stream error: ${err.message}` }));
+            console.error(JSON.stringify({ type: 'error', message: `Torrent transfer error: ${err.message}` }));
             client.destroy();
             process.exit(1);
         });
