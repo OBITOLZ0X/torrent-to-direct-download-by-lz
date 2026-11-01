@@ -131,6 +131,7 @@ class StreamManager:
         """
         cmd = [
             self.node_path,
+            "--max-old-space-size=4096",
             self.streamer_script,
             "--source",
             torrent_source,
@@ -245,6 +246,7 @@ class StreamManager:
         """
         cmd = [
             self.node_path,
+            "--max-old-space-size=2048",
             self.streamer_script,
             "--source",
             magnet_link,

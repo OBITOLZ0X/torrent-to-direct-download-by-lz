@@ -241,10 +241,10 @@ if (getMetadata) {
         queueMicrotask(() => cb(null, buf));
     };
 
-    SlidingMemoryStore.prototype.cleanPastPieces = function (safePieceIndex) {
+    SlidingMemoryStore.prototype.cleanPastPieces = function (safePieceIndex, maxAllowedAhead) {
         if (this.closed || !this.chunks) return;
         for (const idx of this.chunks.keys()) {
-            if (idx < safePieceIndex) {
+            if (idx < safePieceIndex || (maxAllowedAhead !== undefined && idx > maxAllowedAhead)) {
                 this.chunks.delete(idx);
             }
         }
@@ -288,7 +288,12 @@ if (getMetadata) {
         });
     }
 
-    client.add(torrentInput, { store: SlidingMemoryStore, announce: extraTrackers }, async (torrent) => {
+    client.add(torrentInput, {
+        store: SlidingMemoryStore,
+        announce: extraTrackers,
+        deselect: true,
+        strategy: 'sequential'
+    }, async (torrent) => {
         currentTorrent = torrent;
 
         if (fileIndex < 0 || fileIndex >= torrent.files.length) {
@@ -301,7 +306,6 @@ if (getMetadata) {
         }
 
         const file = torrent.files[fileIndex];
-        file.select();
         const totalSize = file.length;
 
         console.log(JSON.stringify({
@@ -346,8 +350,30 @@ if (getMetadata) {
 
         const uploadStream = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
 
+        const WINDOW_SIZE = 16;
+        let lastSlidPiece = -1;
+
+        function slideWebTorrentWindow(currentPiece) {
+            if (currentPiece === lastSlidPiece) return;
+            lastSlidPiece = currentPiece;
+            const windowAhead = Math.min(file._endPiece, currentPiece + WINDOW_SIZE);
+            if (torrent._selections?._items) {
+                for (const item of torrent._selections._items) {
+                    if (item.isStreamSelection) {
+                        item.from = currentPiece;
+                        item.to = windowAhead;
+                    }
+                }
+                torrent._updateSelections();
+            }
+        }
+
         function pipeRawStreamIntoUpload(rawStream) {
             currentRawStream = rawStream;
+
+            // Restrict initial stream selection window
+            slideWebTorrentWindow(file._startPiece);
+
             rawStream.on('error', (err) => {
                 console.error(JSON.stringify({ type: 'error', message: `Torrent transfer error: ${err.message}` }));
                 client.destroy();
@@ -357,11 +383,18 @@ if (getMetadata) {
             rawStream.on('data', (chunk) => {
                 bytesReadFromTorrent += chunk.length;
                 const pieceLen = torrent.pieceLength || (2 * 1024 * 1024);
-                const currentPiece = Math.floor(bytesReadFromTorrent / pieceLen);
-                const safePiece = Math.max(0, currentPiece - 48);
+                // Accurate global piece index taking into account file offset in multi-file torrents
+                const currentTorrentPiece = Math.floor((file.offset + bytesReadFromTorrent) / pieceLen);
+
+                // Free memory: keep at most 3 past pieces behind read head, drop anything > 20 pieces ahead
+                const safePiece = Math.max(0, currentTorrentPiece - 3);
+                const maxAhead = currentTorrentPiece + 20;
                 if (activeStore) {
-                    activeStore.cleanPastPieces(safePiece);
+                    activeStore.cleanPastPieces(safePiece, maxAhead);
                 }
+
+                // Advance the WebTorrent peer download window
+                slideWebTorrentWindow(currentTorrentPiece);
 
                 const ok = uploadStream.write(chunk);
                 if (!ok) {
