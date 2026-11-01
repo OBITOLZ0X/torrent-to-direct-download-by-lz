@@ -29,10 +29,10 @@ def format_time(seconds: float) -> str:
     return f"{hours:02d}h {rem_minutes:02d}m"
 
 def progress_bar(percentage: float, length: int = 10) -> str:
-    """Generate a visual progress bar e.g. [██████░░░░] 60.0%."""
+    """Generate a sleek, modern visual progress bar e.g. [▰▰▰▰▰▰▰▱▱▱] 65.8%."""
     percentage = max(0.0, min(100.0, percentage))
     filled = int(round(length * (percentage / 100.0)))
-    bar = "█" * filled + "░" * (length - filled)
+    bar = "▰" * filled + "▱" * (length - filled)
     return f"[{bar}] {percentage:.1f}%"
 
 def truncate_text(text: str, max_len: int = 32) -> str:

@@ -52,6 +52,26 @@ from github_client import GitHubClient
 
 SEP = "━━━━━━━━━━━━━━━━━━━━━"
 
+# Custom animated emojis (Telegram Sticker Set: SoLo_HaMiD) with fallback standard emojis
+EMOJI_STREAM_UP   = '<tg-emoji emoji-id="5116395218882528029">⏫</tg-emoji>'
+EMOJI_STREAM_DOWN = '<tg-emoji emoji-id="5116204921766544244">⏬</tg-emoji>'
+EMOJI_SPEED       = '<tg-emoji emoji-id="5116093437300442328">⚡️</tg-emoji>'
+EMOJI_CLOCK       = '<tg-emoji emoji-id="5123230779593196220">⏰</tg-emoji>'
+EMOJI_PEERS       = '<tg-emoji emoji-id="5121007227779416740">📶</tg-emoji>'
+EMOJI_GLOBE       = '<tg-emoji emoji-id="4906943755644306322">🌐</tg-emoji>'
+EMOJI_PROGRESS    = '<tg-emoji emoji-id="4904626998745237074">🔋</tg-emoji>'
+EMOJI_CHECK       = '<tg-emoji emoji-id="5118861066981344121">✅</tg-emoji>'
+EMOJI_FIRE        = '<tg-emoji emoji-id="5116414868357907335">🔥</tg-emoji>'
+EMOJI_PIN         = '<tg-emoji emoji-id="4917985158784615388">📌</tg-emoji>'
+EMOJI_USER        = '<tg-emoji emoji-id="5116582462276764538">👤</tg-emoji>'
+EMOJI_LINK        = '<tg-emoji emoji-id="4916086774649848789">🔗</tg-emoji>'
+EMOJI_GEAR        = '<tg-emoji emoji-id="4904936030232117798">⚙️</tg-emoji>'
+EMOJI_ALERT       = '<tg-emoji emoji-id="5120722716260828125">🚨</tg-emoji>'
+EMOJI_HEART       = '<tg-emoji emoji-id="5116368680279606270">♥️</tg-emoji>'
+EMOJI_WAVE        = '<tg-emoji emoji-id="4918354603281482671">👋</tg-emoji>'
+EMOJI_SPARK       = '<tg-emoji emoji-id="5104960787579929462">✨</tg-emoji>'
+EMOJI_LOCK        = '<tg-emoji emoji-id="4904500559203009298">🔒</tg-emoji>'
+
 GITHUB_HELP_TEXT = (
     f"🔑 <b>HOW TO GET A GITHUB TOKEN</b>\n{SEP}\n"
     f"<blockquote>1️⃣ Go to <b>github.com/settings/tokens</b>\n"
@@ -230,15 +250,15 @@ def build_registration_view(user_id: int) -> tuple[str, types.InlineKeyboardMark
     # 1. User registered, but channel not joined yet
     if is_reg and channel_required and not is_channel_member:
         text = (
-            "🔐 <b>CHANNEL MEMBERSHIP REQUIRED</b>\n"
+            f"{EMOJI_LOCK} <b>CHANNEL MEMBERSHIP REQUIRED</b>\n"
             f"{SEP}\n"
-            "<blockquote>✅ <b>Registration:</b> Complete\n"
-            "❌ <b>Channel:</b> Not a member yet</blockquote>\n"
+            f"<blockquote>{EMOJI_CHECK} <b>Registration:</b> Complete\n"
+            f"{EMOJI_ALERT} <b>Channel:</b> Not a member yet</blockquote>\n"
             f"{SEP}\n"
-            "<blockquote>1️⃣ Join our official channel (link below)\n"
-            "2️⃣ Click <b>Verify Channel Membership</b> to confirm</blockquote>\n"
+            f"<blockquote>1️⃣ Join our official channel (link below)\n"
+            f"2️⃣ Click <b>Verify Channel Membership</b> to confirm</blockquote>\n"
             f"{SEP}\n"
-            "🚀 <i>Join the channel and tap verify to start!</i>"
+            f"🚀 <i>Join the channel and tap verify to start!</i>"
         )
         if invite_link:
             kb.add(types.InlineKeyboardButton("📢 Join Channel", url=invite_link))
@@ -247,31 +267,31 @@ def build_registration_view(user_id: int) -> tuple[str, types.InlineKeyboardMark
 
     # 2. User joined channel (or no channel required), but not registered yet
     if is_channel_member and not is_reg:
-        chan_line = "<blockquote>✅ <b>Channel Status:</b> Verified Member</blockquote>\n" if channel_required else ""
+        chan_line = f"<blockquote>{EMOJI_CHECK} <b>Channel Status:</b> Verified Member</blockquote>\n" if channel_required else ""
         text = (
-            "🔐 <b>REGISTRATION REQUIRED</b>\n"
+            f"{EMOJI_LOCK} <b>REGISTRATION REQUIRED</b>\n"
             f"{SEP}\n"
-            f"<blockquote>👋 Welcome to <b>tDownUp</b>!</blockquote>\n"
+            f"<blockquote>{EMOJI_WAVE} Welcome to <b>tDownUp</b>!</blockquote>\n"
             f"{chan_line}"
-            "<blockquote>📝 <b>Final Step:</b> Register your account below</blockquote>\n"
+            f"<blockquote>📝 <b>Final Step:</b> Register your account below</blockquote>\n"
             f"{SEP}\n"
-            "🚀 <i>Tap 'Register Now' to complete setup!</i>"
+            f"🚀 <i>Tap 'Register Now' to complete setup!</i>"
         )
         kb.add(types.InlineKeyboardButton("📝 Register Now", callback_data=f"reg:{user_id}"))
         return text, kb
 
     # 3. Neither step completed (not registered and not in channel)
     text = (
-        "🔐 <b>REGISTRATION REQUIRED</b>\n"
+        f"{EMOJI_LOCK} <b>REGISTRATION REQUIRED</b>\n"
         f"{SEP}\n"
-        "<blockquote>👋 Welcome to <b>tDownUp</b>!</blockquote>\n"
+        f"<blockquote>{EMOJI_WAVE} Welcome to <b>tDownUp</b>!</blockquote>\n"
         f"{SEP}\n"
-        "📋 <b>STEPS TO USE BOT</b>\n"
+        f"📋 <b>STEPS TO USE BOT</b>\n"
         f"{SEP}\n"
-        "<blockquote>1️⃣ Register your account\n"
-        "2️⃣ Join our official channel</blockquote>\n"
+        f"<blockquote>1️⃣ Register your account\n"
+        f"2️⃣ Join our official channel</blockquote>\n"
         f"{SEP}\n"
-        "🚀 <i>Click the buttons below to get started!</i>"
+        f"🚀 <i>Click the buttons below to get started!</i>"
     )
     kb.add(types.InlineKeyboardButton("📝 Register Now", callback_data=f"reg:{user_id}"))
     if invite_link:
@@ -375,7 +395,7 @@ def build_stop_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     return kb
 
 def render_selection_message(session_id: str) -> str:
-    """Render the files selection overview message."""
+    """Render the files selection overview message with animated emojis and clean cards."""
     session = sessions.get(session_id)
     if not session:
         return "Session expired."
@@ -385,12 +405,15 @@ def render_selection_message(session_id: str) -> str:
     selected_count = len(session["selected"])
 
     return (
-        f"🎬 <b>Torrent:</b> <code>{html.escape(name)}</code>\n"
-        f"📦 <b>Total Size:</b> {total_size} | 📁 <b>Files:</b> {file_count}\n"
-        f"🎯 <b>Selected:</b> {selected_count} files\n\n"
-        f"<i>Select the files you want to download below.\n"
-        f"Clicking any file toggles it on (✅) or off (❌).\n"
-        f"When ready, click 'Start Downloading'.</i>"
+        f"{EMOJI_STREAM_DOWN} <b>TORRENT FILE SELECTION</b>\n"
+        f"{SEP}\n"
+        f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(name)}</code>\n"
+        f"📦 <b>Total Size:</b> <code>{total_size}</code>\n"
+        f"📑 <b>Total Files:</b> <code>{file_count}</code>\n"
+        f"{EMOJI_CHECK} <b>Selected:</b> <code>{selected_count} files</code></blockquote>\n"
+        f"{SEP}\n"
+        f"<i>Select the files you want to stream below using toggles.\n"
+        f"When ready, tap <b>Start Downloading</b>.</i>"
     )
 
 # ================= Public Donation Card =================
@@ -431,13 +454,13 @@ def render_donation_card() -> str:
     if not sections:
         admin_contact = get_admin_contact()
         return (
-            f"💖 <b>SUPPORT & DONATE</b>\n{SEP}\n"
+            f"{EMOJI_HEART} <b>SUPPORT & DONATE</b>\n{SEP}\n"
             f"<blockquote>Thank you for your generosity! Donation methods are currently being updated.\n\n"
             f"Please reach out directly to {admin_contact} to support the project.</blockquote>\n{SEP}"
         )
 
     text = (
-        f"💖 <b>SUPPORT & DONATE</b>\n{SEP}\n"
+        f"{EMOJI_HEART} <b>SUPPORT & DONATE</b>\n{SEP}\n"
         f"<blockquote>If you enjoy using this bot, please consider supporting the project to keep the servers, high-speed bandwidth, and development alive!</blockquote>\n\n"
         f"<b>💳 AVAILABLE PAYMENT METHODS:</b>\n{SEP}\n" +
         "\n\n".join(sections) + "\n" +
@@ -503,15 +526,21 @@ def run_stream_pipeline(session_id: str, destination: str):
                 peers = ev.get("peers", 0)
 
                 text = (
-                    f"📥 <b>Streaming to {dest_display}...</b>\n"
-                    f"📁 <code>{html.escape(torrent_name)}</code>\n"
-                    f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> ({fsize_str})\n\n"
-                    f"<code>{progress_bar(pct)}</code>\n\n"
-                    f"📊 <b>Progress:</b> {human_readable_size(transferred)} / {human_readable_size(total)}\n"
-                    f"⚡ <b>Speed:</b> {human_readable_size(speed)}/s\n"
-                    f"⏳ <b>ETA:</b> {format_time(eta)}\n"
-                    f"👥 <b>Peers:</b> {peers}\n"
-                    f"📦 <b>File:</b> {step_num} of {total_files}"
+                    f"{EMOJI_STREAM_UP} <b>STREAMING IN PROGRESS</b>\n"
+                    f"{SEP}\n"
+                    f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                    f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
+                    f"{EMOJI_GLOBE} <b>Destination:</b> <b>{dest_display}</b></blockquote>\n"
+                    f"{SEP}\n"
+                    f"<code>{progress_bar(pct)}</code>\n"
+                    f"{SEP}\n"
+                    f"<blockquote>{EMOJI_PROGRESS} <b>Transferred:</b> <code>{human_readable_size(transferred)} / {human_readable_size(total)}</code>\n"
+                    f"{EMOJI_SPEED} <b>Speed:</b> <code>{human_readable_size(speed)}/s</code>\n"
+                    f"{EMOJI_CLOCK} <b>ETA:</b> <code>{format_time(eta)}</code>\n"
+                    f"{EMOJI_PEERS} <b>Peers:</b> <code>{peers} connected</code>\n"
+                    f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
+                    f"{SEP}\n"
+                    f"<i>{EMOJI_SPEED} Streaming directly to {dest_display}...</i>"
                 )
                 safe_edit_message(chat_id, message_id, text, reply_markup=build_stop_keyboard(session_id))
 
@@ -519,9 +548,12 @@ def run_stream_pipeline(session_id: str, destination: str):
             safe_edit_message(
                 chat_id,
                 message_id,
-                f"📥 <b>Connecting to Swarm...</b>\n"
-                f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> ({fsize_str})\n"
-                f"⏳ <i>Streaming directly to {dest_display}...</i>",
+                f"{EMOJI_STREAM_DOWN} <b>CONNECTING TO BITTORRENT SWARM...</b>\n"
+                f"{SEP}\n"
+                f"<blockquote>📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
+                f"{EMOJI_GLOBE} <b>Destination:</b> <b>{dest_display}</b></blockquote>\n"
+                f"{SEP}\n"
+                f"<i>{EMOJI_SPEED} Establishing peer connections and starting stream...</i>",
                 reply_markup=build_stop_keyboard(session_id),
             )
 
@@ -541,19 +573,23 @@ def run_stream_pipeline(session_id: str, destination: str):
                 safe_edit_message(
                     chat_id,
                     message_id,
-                    f"❌ <b>Stream Error for:</b> <code>{html.escape(fname)}</code>\n"
-                    f"<b>Reason:</b> {html.escape(error_msg)}",
+                    f"{EMOJI_ALERT} <b>STREAM ERROR</b>\n"
+                    f"{SEP}\n"
+                    f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
+                    f"⚠️ <b>Reason:</b> <code>{html.escape(error_msg)}</code></blockquote>\n"
+                    f"{SEP}\n"
+                    f"<i>If the problem persists, please contact the bot owner.</i>",
                     reply_markup=None,
                 )
                 err_channel = db.get_setting("error_channel", "").strip()
                 if err_channel:
                     try:
                         err_card = (
-                            f"❌ <b>STREAM ERROR LOG</b>\n{SEP}\n"
+                            f"{EMOJI_ALERT} <b>STREAM ERROR LOG</b>\n{SEP}\n"
                             f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
-                            f"👤 <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
+                            f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)\n"
                             f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:200])}</code>\n"
-                            f"⏱️ <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n"
+                            f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n"
                             f"{SEP}"
                         )
                         bot.send_message(err_channel, err_card)
@@ -567,12 +603,12 @@ def run_stream_pipeline(session_id: str, destination: str):
             if res_channel:
                 try:
                     res_card = (
-                        f"🚀 <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
+                        f"{EMOJI_FIRE} <b>TORRENT STREAM COMPLETED</b>\n{SEP}\n"
                         f"<blockquote>📁 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                         f"📦 <b>Size:</b> <code>{fsize_str}</code>\n"
-                        f"🌐 <b>Host:</b> {dest_display}\n"
-                        f"🔗 <b>Link:</b> <a href=\"{result}\">Download File</a>\n"
-                        f"👤 <b>User:</b> @{user_name} (<code>{user_id}</code>)</blockquote>\n"
+                        f"{EMOJI_GLOBE} <b>Host:</b> {dest_display}\n"
+                        f"{EMOJI_LINK} <b>Link:</b> <a href=\"{result}\">Download File</a>\n"
+                        f"{EMOJI_USER} <b>User:</b> @{user_name} (<code>{user_id}</code>)</blockquote>\n"
                         f"{SEP}"
                     )
                     bot.send_message(res_channel, res_card, disable_web_page_preview=False)
@@ -586,21 +622,29 @@ def run_stream_pipeline(session_id: str, destination: str):
         # Final rendering
         if cancel_event.is_set():
             cancel_text = (
-                "🛑 <b>Download Stopped</b>\n\n"
-                "The download and stream process was cancelled by user request."
+                f"🛑 <b>STREAM CANCELLED</b>\n"
+                f"{SEP}\n"
+                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                f"⚠️ <b>Status:</b> Stream cancelled by user request.</blockquote>\n"
+                f"{SEP}"
             )
             safe_edit_message(chat_id, message_id, cancel_text, reply_markup=None)
         else:
             links_section = ""
             for i, (fn, url, sz, _) in enumerate(uploaded_results, 1):
-                links_section += f"{i}. <a href=\"{url}\">{html.escape(fn)}</a> ({sz})\n"
+                links_section += f"<blockquote><b>{i}.</b> <a href=\"{url}\">{html.escape(fn)}</a> (<code>{sz}</code>)</blockquote>\n"
 
             done_text = (
-                f"🎉 <b>Download & Transfer Completed!</b>\n"
-                f"📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                f"🌐 <b>Host:</b> {dest_display}\n\n"
-                f"🔗 <b>Download Links:</b>\n"
+                f"{EMOJI_CHECK} <b>DOWNLOAD & STREAM COMPLETED!</b>\n"
+                f"{SEP}\n"
+                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                f"{EMOJI_GLOBE} <b>Cloud Host:</b> <b>{dest_display}</b>\n"
+                f"📦 <b>Files Streamed:</b> <code>{len(uploaded_results)} file(s)</code></blockquote>\n"
+                f"{SEP}\n"
+                f"{EMOJI_LINK} <b>DIRECT DOWNLOAD LINKS:</b>\n"
                 f"{links_section}"
+                f"{SEP}\n"
+                f"{EMOJI_SPARK} <i>Tap the link above to start high-speed downloading. Support our servers below:</i>"
             )
             # Add Donate Button below completion message
             done_kb = types.InlineKeyboardMarkup()
@@ -1072,23 +1116,27 @@ def handle_donate_command(message: types.Message):
     bot.reply_to(message, render_donation_card(), disable_web_page_preview=True)
 
 def render_start_text(user_id: int, user_name: str) -> str:
-    """Welcome and usage instructions. Clean layout with owner contact and no status/role clutter."""
+    """Welcome and usage instructions with animated emojis and clean styling."""
     admin_contact = get_admin_contact()
     clean_name = html.escape(user_name or "User")
 
     return (
-        "👋 <b>Welcome to tDownUp!</b>\n\n"
-        f"👤 <b>User:</b> {clean_name}\n\n"
-        "<b>tDownUp</b> allows you to download torrent files and magnet links directly to <b>Buzzheavier</b> and <b>Gofile</b> at high speeds.\n\n"
-        "📥 <b>How to Use:</b>\n"
-        "• Send <code>/dw &lt;magnet_link&gt;</code>\n"
-        "• Or reply to a <code>.torrent</code> file with <code>/dw</code>\n"
-        "• Or directly send a <code>.torrent</code> file\n"
-        "• Or simply paste any magnet link!\n\n"
-        "📌 <b>Commands:</b>\n"
-        "• <code>/account</code> - View your daily downloads quota & limits\n"
-        "• <code>/donate</code> - Support the project\n\n"
-        "💬 <b>Support & Assistance:</b>\n"
+        f"{EMOJI_WAVE} <b>Welcome to tDownUp!</b>\n"
+        f"{SEP}\n"
+        f"<blockquote>{EMOJI_USER} <b>User:</b> {clean_name}\n"
+        f"{EMOJI_SPEED} <b>Engine:</b> <code>tDownUp Stream Core V2</code>\n"
+        f"{EMOJI_GLOBE} <b>Supported Hosts:</b> <code>Buzzheavier.com</code> & <code>Gofile.io</code></blockquote>\n"
+        f"{SEP}\n"
+        f"<b>tDownUp</b> allows you to download torrent files and magnet links directly to cloud storage at maximum speeds.\n\n"
+        f"📥 <b>HOW TO USE:</b>\n"
+        f"<blockquote>• Send <code>/dw &lt;magnet_link&gt;</code>\n"
+        f"• Or reply to a <code>.torrent</code> file with <code>/dw</code>\n"
+        f"• Or directly send a <code>.torrent</code> file\n"
+        f"• Or simply paste any magnet link!</blockquote>\n\n"
+        f"{EMOJI_PIN} <b>COMMANDS:</b>\n"
+        f"<blockquote>• <code>/account</code> - View daily downloads quota & limits\n"
+        f"• <code>/donate</code> - Support project & hosting</blockquote>\n\n"
+        f"💬 <b>Support & Assistance:</b>\n"
         f"If you need help or have questions, contact {admin_contact}."
     )
 
@@ -1122,9 +1170,9 @@ def handle_account(message: types.Message):
     max_sz_str = "Unlimited ♾️ (Admin)" if is_admin else f"{max_size_gb} GB"
 
     text = (
-        "💳 <b>ACCOUNT INFORMATION</b>\n"
+        f"{EMOJI_PROGRESS} <b>ACCOUNT INFORMATION</b>\n"
         f"{SEP}\n"
-        f"<blockquote>👤 <b>Name:</b> {html.escape(user_name)}\n"
+        f"<blockquote>{EMOJI_USER} <b>Name:</b> {html.escape(user_name)}\n"
         f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
         f"📅 <b>Registered:</b> <code>{info.get('registered_at', 'N/A')}</code>\n"
         f"📊 <b>Today's Usage:</b> <code>{quota_str}</code>\n"
@@ -2005,10 +2053,11 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         dest_kb = build_destination_keyboard(session_id)
         dest_text = (
-            f"🌐 <b>CHOOSE UPLOAD DESTINATION</b>\n{SEP}\n"
-            f"📁 <b>Torrent:</b> <code>{html.escape(session['torrent_name'])}</code>\n"
-            f"📦 <b>Files:</b> {len(selected_files)} selected ({human_readable_size(total_selected_size)})\n\n"
-            f"<i>Where would you like to stream your files?</i>"
+            f"{EMOJI_GLOBE} <b>CHOOSE UPLOAD DESTINATION</b>\n{SEP}\n"
+            f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(session['torrent_name'])}</code>\n"
+            f"📦 <b>Selected:</b> <code>{len(selected_files)} files</code> (<code>{human_readable_size(total_selected_size)}</code>)</blockquote>\n"
+            f"{SEP}\n"
+            f"<i>Select the cloud storage service to stream your files to:</i>"
         )
         safe_edit_message(sess_chat_id, sess_message_id, dest_text, reply_markup=dest_kb)
 
