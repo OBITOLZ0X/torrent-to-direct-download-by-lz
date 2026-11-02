@@ -400,9 +400,9 @@ def send_registration_prompt(chat_id: int, user_id: int, reply_to_id: int = None
     """Send dynamic blockquote registration banner."""
     text, kb = build_registration_view(user_id)
     if reply_to_id:
-        bot.send_message(chat_id, text, reply_markup=kb, reply_to_message_id=reply_to_id)
+        bot.send_message(chat_id, text, reply_markup=kb, reply_to_message_id=reply_to_id, disable_web_page_preview=True)
     else:
-        bot.send_message(chat_id, text, reply_markup=kb)
+        bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
 
 def check_user_access(message: types.Message) -> bool:
     """Validate user registration, channel membership, ban status, and bot mode."""
@@ -599,6 +599,48 @@ def render_donation_card() -> str:
     text += "<i>💡 Tap any address or ID to copy it directly. Thank you for your support! 🙏</i>"
     return text
 
+def build_links_presentation(uploaded_results: list, max_inline: int = 10) -> str:
+    """
+    Format direct download links inside a single clean expandable blockquote.
+    Telegram collapses this automatically so messages remain sleek even with many episodes.
+    """
+    total_count = len(uploaded_results)
+    inline_items = uploaded_results[:max_inline]
+
+    lines = []
+    for i, (fn, url, sz, _) in enumerate(inline_items, 1):
+        lines.append(f"<b>{i}.</b> <a href=\"{url}\">{html.escape(fn)}</a> (<code>{sz}</code>)")
+
+    if total_count > max_inline:
+        lines.append(f"<i>... and {total_count - max_inline} more file(s) (see attached document below).</i>")
+
+    return "<blockquote expandable>\n" + "\n".join(lines) + "\n</blockquote>"
+
+def build_links_text_file(torrent_name: str, host: str, uploaded_results: list) -> bytes:
+    """Generate a clean .txt file with all links formatted for download managers (IDM, JDownloader)."""
+    total_sz = human_readable_size(sum(sz_b for (_, _, _, sz_b) in uploaded_results))
+    content = [
+        "============================================================",
+        f"  tDownUp - DIRECT DOWNLOAD LINKS",
+        f"  Torrent: {torrent_name}",
+        f"  Host:    {host}",
+        f"  Files:   {len(uploaded_results)} files ({total_sz})",
+        f"  Date:    {time.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        "============================================================\n",
+        "--- FILES LIST ---"
+    ]
+    for i, (fn, url, sz, _) in enumerate(uploaded_results, 1):
+        content.append(f"{i}. {fn} ({sz})")
+        content.append(f"   Link: {url}\n")
+
+    content.append("============================================================")
+    content.append("--- RAW LINKS (COPY ALL FOR IDM / JDOWNLOADER / 1DM) ---")
+    content.append("============================================================")
+    for _, url, _, _ in uploaded_results:
+        content.append(url)
+
+    return "\n".join(content).encode("utf-8")
+
 # ================= Direct Live Transfer Pipeline =================
 
 def run_stream_pipeline(session_id: str, destination: str):
@@ -777,7 +819,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"<i>⚡ Retrying automatically. Progress will resume in the card above.</i>"
                     )
                     try:
-                        bot.send_message(chat_id, retry_user_alert)
+                        bot.send_message(chat_id, retry_user_alert, disable_web_page_preview=True)
                     except Exception as ue:
                         print(f"[UserNotify] Failed to send retry alert: {ue}")
 
@@ -795,7 +837,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                                 f"🔄 <b>Attempt:</b> <code>{attempt + 2} of {max_retries + 1}</code>\n"
                                 f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n{SEP}"
                             )
-                            bot.send_message(err_channel, err_card_retry)
+                            bot.send_message(err_channel, err_card_retry, disable_web_page_preview=True)
                         except Exception as ce:
                             print(f"[ErrorChannel] Failed to send retry log: {ce}")
 
@@ -849,7 +891,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                             f"⚠️ <b>Error:</b> <code>{html.escape(error_msg[:250])}</code>\n"
                             f"{EMOJI_CLOCK} <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</code></blockquote>\n{SEP}"
                         )
-                        bot.send_message(err_channel, err_card)
+                        bot.send_message(err_channel, err_card, disable_web_page_preview=True)
                     except Exception as ce:
                         print(f"[ErrorChannel] Failed to send: {ce}")
                 return
@@ -872,9 +914,7 @@ def run_stream_pipeline(session_id: str, destination: str):
             )
             safe_edit_message(chat_id, message_id, cancel_text, reply_markup=None)
         else:
-            links_section = ""
-            for i, (fn, url, sz, _) in enumerate(uploaded_results, 1):
-                links_section += f"<blockquote><b>{i}.</b> <a href=\"{url}\">{html.escape(fn)}</a> (<code>{sz}</code>)</blockquote>\n"
+            links_section = build_links_presentation(uploaded_results, max_inline=10)
 
             done_text = (
                 f"{EMOJI_CHECK} <b>DOWNLOAD & TRANSFER COMPLETED!</b>\n"
@@ -892,6 +932,20 @@ def run_stream_pipeline(session_id: str, destination: str):
             done_kb = types.InlineKeyboardMarkup()
             done_kb.add(types.InlineKeyboardButton("☕ Support & Donate", callback_data="pub_show_donation"))
             safe_edit_message(chat_id, message_id, done_text, reply_markup=done_kb)
+
+            # If multiple files transferred, send a convenient batch text document (.txt) for 1-click import in IDM / JDownloader
+            if len(uploaded_results) > 1:
+                try:
+                    links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
+                    clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
+                    bot.send_document(
+                        chat_id,
+                        (clean_doc_name, links_doc),
+                        caption=f"📁 <b>Batch Download Links File:</b> <code>{clean_doc_name}</code>\n<i>Import into IDM, JDownloader, or 1DM to download all files at once.</i>",
+                        parse_mode="HTML"
+                    )
+                except Exception as de:
+                    print(f"[SendDoc] Failed to send links txt file: {de}")
 
             # Broadcast ALL transferred files from this torrent together in ONE message to Results Channel
             res_channel = db.get_setting("results_channel", "").strip()
@@ -912,7 +966,19 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"{links_section}"
                         f"{SEP}"
                     )
-                    bot.send_message(res_channel, res_card, disable_web_page_preview=False)
+                    bot.send_message(res_channel, res_card, disable_web_page_preview=True)
+                    if len(uploaded_results) > 1:
+                        try:
+                            links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
+                            clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
+                            bot.send_document(
+                                res_channel,
+                                (clean_doc_name, links_doc),
+                                caption=f"📁 <b>Batch Download Links:</b> <code>{clean_doc_name}</code>",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
                 except Exception as ce:
                     print(f"[ResultsChannel] Failed to send combined card: {ce}")
 
