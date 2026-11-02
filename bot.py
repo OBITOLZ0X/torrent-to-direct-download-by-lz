@@ -4,6 +4,8 @@ import re
 import time
 import uuid
 import html
+import json
+import urllib.request
 import threading
 from typing import Dict, Optional, Any
 
@@ -641,6 +643,106 @@ def build_links_text_file(torrent_name: str, host: str, uploaded_results: list) 
 
     return "\n".join(content).encode("utf-8")
 
+def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_display: str, user_tag: str, uploaded_results: list, is_channel: bool = False) -> bool:
+    """
+    Sends a single merged Rich Message containing:
+    1. The batch download text document (_Links.txt) embedded at the top of the bubble.
+    2. The full completion status card.
+    3. The native bordered & striped table (Name | Size | Download) inside an expandable details block.
+    Telegram natively handles smooth vertical & horizontal scrolling for this table without bot pagination buttons.
+    """
+    try:
+        total_uploaded_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
+        total_sz_str = human_readable_size(total_uploaded_bytes)
+        clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
+        links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
+
+        table_cells = [
+            [
+                {"text": "Name", "is_header": True, "align": "center"},
+                {"text": "Size", "is_header": True, "align": "center"},
+                {"text": "Download", "is_header": True, "align": "center"}
+            ]
+        ]
+        for fname, url, sz_str, _ in uploaded_results:
+            table_cells.append([
+                {"text": fname, "align": "left"},
+                {"text": sz_str, "align": "center"},
+                {"text": {"type": "url", "text": "Download 📥", "url": url}, "align": "center"}
+            ])
+
+        rich_msg = {
+            "blocks": [
+                {
+                    "type": "document",
+                    "document": {
+                        "type": "document",
+                        "media": "attach://doc"
+                    }
+                },
+                {
+                    "type": "paragraph",
+                    "text": [
+                        "🎉 ", {"type": "bold", "text": "TORRENT TRANSFER COMPLETED\n"},
+                        f"{SEP}\n",
+                        "📁 ", {"type": "bold", "text": "Torrent: "}, torrent_name + "\n",
+                        "📦 ", {"type": "bold", "text": "Total Size: "}, f"{total_sz_str} ({len(uploaded_results)} files)\n",
+                        "🌐 ", {"type": "bold", "text": "Host: "}, dest_display + "\n",
+                        "👤 ", {"type": "bold", "text": "Uploaded By: "}, user_tag + "\n",
+                        f"{SEP}"
+                    ]
+                },
+                {
+                    "type": "details",
+                    "summary": f"📁 Download Links ({len(uploaded_results)} Files)",
+                    "blocks": [
+                        {
+                            "type": "table",
+                            "cells": table_cells,
+                            "is_bordered": True,
+                            "is_striped": True
+                        }
+                    ]
+                }
+            ]
+        }
+
+        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+        parts = [
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode("utf-8"),
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"rich_message\"\r\n\r\n{json.dumps(rich_msg, ensure_ascii=True)}\r\n".encode("utf-8"),
+        ]
+
+        if not is_channel:
+            reply_markup = {
+                "inline_keyboard": [
+                    [{"text": "☕ Support & Donate", "callback_data": "pub_show_donation"}]
+                ]
+            }
+            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"reply_markup\"\r\n\r\n{json.dumps(reply_markup, ensure_ascii=True)}\r\n".encode("utf-8"))
+
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"{clean_doc_name}\"\r\nContent-Type: text/plain\r\n\r\n".encode("utf-8")
+            + links_doc
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+
+        body = b"".join(parts)
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok"):
+                return True
+            else:
+                print(f"[send_unified_completion_message] Telegram API error: {data}")
+    except Exception as e:
+        print(f"[send_unified_completion_message] Exception: {e}")
+    return False
+
 # ================= Direct Live Transfer Pipeline =================
 
 def run_stream_pipeline(session_id: str, destination: str):
@@ -927,71 +1029,84 @@ def run_stream_pipeline(session_id: str, destination: str):
             )
             safe_edit_message(chat_id, message_id, cancel_text, reply_markup=None)
         else:
-            links_section = build_links_presentation(uploaded_results, max_inline=10)
+            user_tag = f"@{user_name}" if user_name and user_name != "user" else f"User {user_id}"
 
-            done_text = (
-                f"{EMOJI_CHECK} <b>DOWNLOAD & TRANSFER COMPLETED!</b>\n"
-                f"{SEP}\n"
-                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
-                f"📦 <b>Files Transferred:</b> <code>{len(uploaded_results)} file(s)</code></blockquote>\n"
-                f"{SEP}\n"
-                f"{EMOJI_LINK} <b>DIRECT DOWNLOAD LINKS:</b>\n"
-                f"{links_section}"
-                f"{SEP}\n"
-                f"<i>💡 Tap any link above to start high-speed downloading. Support our servers below:</i>"
+            # 1. Send Unified Completion Message (Document + Status Card + Scrollable Table) in ONE single bubble
+            sent_unified = send_unified_completion_message(
+                chat_id=chat_id,
+                torrent_name=torrent_name,
+                dest_display=dest_display,
+                user_tag=user_tag,
+                uploaded_results=uploaded_results,
+                is_channel=False
             )
-            # Add Donate Button below completion message
-            done_kb = types.InlineKeyboardMarkup()
-            done_kb.add(types.InlineKeyboardButton("☕ Support & Donate", callback_data="pub_show_donation"))
-            safe_edit_message(chat_id, message_id, done_text, reply_markup=done_kb)
 
-            # If multiple files transferred, send a convenient batch text document (.txt) for 1-click import in IDM / JDownloader
-            if len(uploaded_results) > 1:
+            if sent_unified:
+                # Delete the previous in-progress progress card so only the single unified message remains in chat
                 try:
-                    links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
-                    clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
-                    bot.send_document(
-                        chat_id,
-                        (clean_doc_name, links_doc),
-                        caption=f"📁 <b>Batch Download Links File:</b> <code>{clean_doc_name}</code>\n<i>Import into IDM, JDownloader, or 1DM to download all files at once.</i>",
-                        parse_mode="HTML"
-                    )
-                except Exception as de:
-                    print(f"[SendDoc] Failed to send links txt file: {de}")
+                    bot.delete_message(chat_id, message_id)
+                except Exception:
+                    pass
+            else:
+                # Fallback to standard edit + send_document if Rich Message API is not supported
+                links_section = build_links_presentation(uploaded_results, max_inline=10)
+                done_text = (
+                    f"{EMOJI_CHECK} <b>DOWNLOAD & TRANSFER COMPLETED!</b>\n"
+                    f"{SEP}\n"
+                    f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                    f"{EMOJI_GLOBE} <b>Host:</b> <b>{dest_display}</b>\n"
+                    f"📦 <b>Files Transferred:</b> <code>{len(uploaded_results)} file(s)</code></blockquote>\n"
+                    f"{SEP}\n"
+                    f"{EMOJI_LINK} <b>DIRECT DOWNLOAD LINKS:</b>\n"
+                    f"{links_section}"
+                    f"{SEP}\n"
+                    f"<i>💡 Tap any link above to start high-speed downloading. Support our servers below:</i>"
+                )
+                done_kb = types.InlineKeyboardMarkup()
+                done_kb.add(types.InlineKeyboardButton("☕ Support & Donate", callback_data="pub_show_donation"))
+                safe_edit_message(chat_id, message_id, done_text, reply_markup=done_kb)
 
-            # Broadcast ALL transferred files from this torrent together in ONE message to Results Channel
+                if len(uploaded_results) > 1:
+                    try:
+                        links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
+                        clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
+                        bot.send_document(
+                            chat_id,
+                            (clean_doc_name, links_doc),
+                            caption=f"📁 <b>Batch Download Links File:</b> <code>{clean_doc_name}</code>\n<i>Import into IDM, JDownloader, or 1DM to download all files at once.</i>",
+                            parse_mode="HTML"
+                        )
+                    except Exception as de:
+                        print(f"[SendDoc] Failed to send links txt file: {de}")
+
+            # 2. Broadcast to Results Channel as a single unified message as well
             res_channel = db.get_setting("results_channel", "").strip()
             if res_channel:
                 try:
-                    total_uploaded_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
-                    total_sz_str = human_readable_size(total_uploaded_bytes)
-                    user_tag = f"@{user_name}" if user_name and user_name != "user" else f"User {user_id}"
-
-                    res_card = (
-                        f"🎉 <b>TORRENT TRANSFER COMPLETED</b>\n{SEP}\n"
-                        f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                        f"📦 <b>Total Size:</b> <code>{total_sz_str}</code> (<code>{len(uploaded_results)} files</code>)\n"
-                        f"🌐 <b>Host:</b> <b>{dest_display}</b>\n"
-                        f"👤 <b>Uploaded By:</b> {html.escape(user_tag)}</blockquote>\n"
-                        f"{SEP}\n"
-                        f"🔗 <b>DOWNLOAD LINKS:</b>\n"
-                        f"{links_section}"
-                        f"{SEP}"
+                    sent_res_unified = send_unified_completion_message(
+                        chat_id=res_channel,
+                        torrent_name=torrent_name,
+                        dest_display=dest_display,
+                        user_tag=user_tag,
+                        uploaded_results=uploaded_results,
+                        is_channel=True
                     )
-                    bot.send_message(res_channel, res_card, disable_web_page_preview=True)
-                    if len(uploaded_results) > 1:
-                        try:
-                            links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
-                            clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
-                            bot.send_document(
-                                res_channel,
-                                (clean_doc_name, links_doc),
-                                caption=f"📁 <b>Batch Download Links:</b> <code>{clean_doc_name}</code>",
-                                parse_mode="HTML"
-                            )
-                        except Exception:
-                            pass
+                    if not sent_res_unified:
+                        total_uploaded_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
+                        total_sz_str = human_readable_size(total_uploaded_bytes)
+                        links_section = build_links_presentation(uploaded_results, max_inline=10)
+                        res_card = (
+                            f"🎉 <b>TORRENT TRANSFER COMPLETED</b>\n{SEP}\n"
+                            f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                            f"📦 <b>Total Size:</b> <code>{total_sz_str}</code> (<code>{len(uploaded_results)} files</code>)\n"
+                            f"🌐 <b>Host:</b> <b>{dest_display}</b>\n"
+                            f"👤 <b>Uploaded By:</b> {html.escape(user_tag)}</blockquote>\n"
+                            f"{SEP}\n"
+                            f"🔗 <b>DOWNLOAD LINKS:</b>\n"
+                            f"{links_section}"
+                            f"{SEP}"
+                        )
+                        bot.send_message(res_channel, res_card, disable_web_page_preview=True)
                 except Exception as ce:
                     print(f"[ResultsChannel] Failed to send combined card: {ce}")
 
