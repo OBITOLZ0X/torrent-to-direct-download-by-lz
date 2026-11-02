@@ -51,6 +51,7 @@ class DatabaseManager:
                 "daily_bandwidth_gb_regular": 100.0,
                 "buzzheavier_account_id": "",
                 "gofile_api_token": "",
+                "vikingfile_user_hash": "",
                 # Donation configurations
                 "donation_paypal": "",
                 "donation_binance_id": "",

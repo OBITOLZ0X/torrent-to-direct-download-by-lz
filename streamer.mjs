@@ -31,6 +31,7 @@ let fileIndex = 0;
 let destination = 'buzzheavier';
 let accountId = '';
 let gofileToken = '';
+let vikingToken = '';
 let getMetadata = false;
 let outputPath = '';
 
@@ -45,6 +46,8 @@ for (let i = 0; i < args.length; i++) {
         accountId = args[++i];
     } else if (args[i] === '--gofile-token' && args[i + 1]) {
         gofileToken = args[++i];
+    } else if (args[i] === '--viking-token' && args[i + 1]) {
+        vikingToken = args[++i];
     } else if (args[i] === '--get-metadata') {
         getMetadata = true;
     } else if (args[i] === '--output' && args[i + 1]) {
@@ -311,6 +314,78 @@ if (getMetadata) {
             }).on('error', () => {
                 resolve(['store-eu-par-5', 'store-na-phx-3', 'store8']);
             });
+        });
+    }
+
+    // Helper to initialize multipart chunked upload on VikingFile.com
+    function getVikingUploadUrls(size) {
+        return new Promise((resolve, reject) => {
+            const postData = `size=${size}`;
+            const req = https.request('https://vikingfile.com/api/get-upload-url', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Content-Length': Buffer.byteLength(postData),
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            }, (res) => {
+                let body = '';
+                res.on('data', d => body += d);
+                res.on('end', () => {
+                    try {
+                        const data = JSON.parse(body);
+                        if (data && data.urls && data.urls.length > 0) {
+                            resolve(data);
+                        } else {
+                            reject(new Error(`Invalid response from VikingFile get-upload-url: ${body}`));
+                        }
+                    } catch (e) {
+                        reject(new Error(`Failed to parse VikingFile get-upload-url response: ${body}`));
+                    }
+                });
+            });
+            req.on('error', reject);
+            req.write(postData);
+            req.end();
+        });
+    }
+
+    // Helper to complete multipart upload on VikingFile.com
+    function completeVikingUpload(info, etags, filename, userToken = '') {
+        return new Promise((resolve, reject) => {
+            const params = new URLSearchParams();
+            params.append('key', info.key);
+            params.append('uploadId', info.uploadId);
+            params.append('name', filename);
+            params.append('user', userToken || '');
+            etags.forEach((item, idx) => {
+                params.append(`parts[${idx}][PartNumber]`, item.PartNumber);
+                params.append(`parts[${idx}][ETag]`, item.ETag);
+            });
+
+            const postData = params.toString();
+            const req = https.request('https://vikingfile.com/api/complete-upload', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Content-Length': Buffer.byteLength(postData),
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            }, (res) => {
+                let body = '';
+                res.on('data', d => body += d);
+                res.on('end', () => {
+                    try {
+                        const data = JSON.parse(body);
+                        resolve(data);
+                    } catch (e) {
+                        reject(new Error(`Failed to parse VikingFile complete-upload response: ${body}`));
+                    }
+                });
+            });
+            req.on('error', reject);
+            req.write(postData);
+            req.end();
         });
     }
 
@@ -599,6 +674,180 @@ if (getMetadata) {
         }
 
         // ─────────────────────────────────────────────
+        // Route 3: VikingFile.com Upload (Resumable S3 Multipart)
+        // ─────────────────────────────────────────────
+        async function startVikingfileUpload(firstChunk, rawStream) {
+            currentRawStream = rawStream;
+            let uploadInfo;
+            try {
+                uploadInfo = await getVikingUploadUrls(totalSize);
+            } catch (err) {
+                console.error(JSON.stringify({
+                    type: 'error',
+                    message: `Failed to initialize VikingFile upload: ${err.message}`
+                }));
+                client.destroy();
+                process.exit(1);
+            }
+
+            const partSize = uploadInfo.partSize;
+            const numberParts = uploadInfo.numberParts;
+            const urls = uploadInfo.urls;
+
+            function getPartLength(idx) {
+                return (idx === numberParts - 1)
+                    ? (totalSize - (partSize * (numberParts - 1)))
+                    : partSize;
+            }
+
+            function createPartPut(url, pLen) {
+                const u = new URL(url);
+                const pass = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
+                const promise = new Promise((resolve, reject) => {
+                    const req = https.request({
+                        protocol: u.protocol,
+                        hostname: u.hostname,
+                        path: u.pathname + u.search,
+                        method: 'PUT',
+                        headers: {
+                            'Content-Length': pLen,
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                            'Accept': '*/*',
+                            'Connection': 'keep-alive'
+                        }
+                    }, (res) => {
+                        let body = '';
+                        res.on('data', d => body += d);
+                        res.on('end', () => {
+                            if (res.statusCode === 200 || res.statusCode === 201) {
+                                const rawEtag = res.headers['etag'] || '';
+                                const etag = rawEtag.replace(/"/g, '');
+                                resolve(etag);
+                            } else {
+                                reject(new Error(`VikingFile PUT part failed HTTP ${res.statusCode}: ${body}`));
+                            }
+                        });
+                    });
+
+                    req.on('socket', (socket) => {
+                        socket.setKeepAlive(true, 15000);
+                        socket.setTimeout(0);
+                    });
+
+                    req.on('error', (err) => {
+                        const isConnClosed = err.message?.includes('socket hang up') ||
+                                             err.code === 'ECONNRESET' ||
+                                             err.code === 'ETIMEDOUT' ||
+                                             err.message?.includes('timed out');
+                        reject(new Error(isConnClosed ? `VikingFile upload connection lost: ${err.message}` : err.message));
+                    });
+
+                    pass.pipe(req);
+                });
+
+                return { pass, promise };
+            }
+
+            const etags = [];
+            let currentPartIdx = 0;
+            let bytesInCurrentPart = 0;
+            let activePart = createPartPut(urls[0], getPartLength(0));
+
+            startTime = Date.now();
+            const progressInterval = setInterval(() => {
+                const now = Date.now();
+                const elapsed = Math.max(0.001, (now - startTime) / 1000);
+                const speed = (isStreamPaused || elapsed <= 0) ? 0 : (bytesSentToNetwork / elapsed);
+                const remaining = Math.max(0, totalSize - bytesSentToNetwork);
+                const eta = (isStreamPaused || speed <= 0) ? 0 : (remaining / speed);
+
+                console.log(JSON.stringify({
+                    type: 'progress',
+                    phase: 'transfer',
+                    transferred: bytesSentToNetwork,
+                    total: totalSize,
+                    speed: speed,
+                    eta: eta,
+                    peers: torrent.numPeers,
+                    isPaused: isStreamPaused
+                }));
+            }, 1500);
+
+            async function* getChunks() {
+                if (firstChunk) yield firstChunk;
+                for await (const chunk of rawStream) {
+                    yield chunk;
+                }
+            }
+
+            try {
+                for await (const chunk of getChunks()) {
+                    while (isStreamPaused) {
+                        await new Promise(r => setTimeout(r, 200));
+                    }
+
+                    bytesReadFromTorrent += chunk.length;
+                    const pieceLen = torrent.pieceLength || (2 * 1024 * 1024);
+                    const currentTorrentPiece = Math.floor((file.offset + bytesReadFromTorrent) / pieceLen);
+                    const safePiece = Math.max(0, currentTorrentPiece - 4);
+                    if (activeStore) {
+                        activeStore.cleanPastPieces(safePiece);
+                    }
+
+                    let chunkOffset = 0;
+                    while (chunkOffset < chunk.length) {
+                        const expectedLen = getPartLength(currentPartIdx);
+                        const remainingForPart = expectedLen - bytesInCurrentPart;
+                        const availableFromChunk = chunk.length - chunkOffset;
+                        const toWrite = Math.min(remainingForPart, availableFromChunk);
+
+                        const slice = chunk.subarray(chunkOffset, chunkOffset + toWrite);
+                        const canWrite = activePart.pass.write(slice);
+                        if (!canWrite) {
+                            await new Promise(resolve => activePart.pass.once('drain', resolve));
+                        }
+                        bytesInCurrentPart += toWrite;
+                        bytesSentToNetwork += toWrite;
+                        chunkOffset += toWrite;
+
+                        if (bytesInCurrentPart === expectedLen) {
+                            activePart.pass.end();
+                            const etag = await activePart.promise;
+                            etags.push({ PartNumber: currentPartIdx + 1, ETag: etag });
+
+                            currentPartIdx++;
+                            if (currentPartIdx < numberParts) {
+                                activePart = createPartPut(urls[currentPartIdx], getPartLength(currentPartIdx));
+                                bytesInCurrentPart = 0;
+                            }
+                        }
+                    }
+                }
+
+                clearInterval(progressInterval);
+
+                const compResult = await completeVikingUpload(uploadInfo, etags, file.name, vikingToken);
+                const pageUrl = compResult.url || `https://vikingfile.com/f/${compResult.hash || ''}`;
+                console.log(JSON.stringify({
+                    type: 'done',
+                    status: 200,
+                    destination: 'vikingfile',
+                    url: pageUrl,
+                    hash: compResult.hash
+                }));
+                client.destroy(() => process.exit(0));
+            } catch (err) {
+                clearInterval(progressInterval);
+                console.error(JSON.stringify({
+                    type: 'error',
+                    message: `VikingFile stream error: ${err.message}`
+                }));
+                client.destroy();
+                process.exit(1);
+            }
+        }
+
+        // ─────────────────────────────────────────────
         // Buffer Initial Piece Before Opening HTTP Sockets
         // ─────────────────────────────────────────────
         const rawStream = file.createReadStream();
@@ -647,6 +896,8 @@ if (getMetadata) {
 
             if (destination === 'gofile') {
                 await startGofileUpload(firstChunk, rawStream);
+            } else if (destination === 'vikingfile') {
+                await startVikingfileUpload(firstChunk, rawStream);
             } else {
                 await startBuzzheavierUpload(firstChunk, rawStream);
             }

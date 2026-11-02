@@ -476,19 +476,36 @@ def build_file_selection_keyboard(session_id: str) -> types.InlineKeyboardMarkup
     return kb
 
 def build_destination_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
-    """Construct keyboard allowing user to pick Buzzheavier or Gofile."""
-    kb = types.InlineKeyboardMarkup(row_width=2)
+    """Construct keyboard allowing user to pick Buzzheavier, Gofile, or VikingFile."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
-        types.InlineKeyboardButton("🐝 Buzzheavier", callback_data=f"start:{session_id}:buzzheavier"),
-        types.InlineKeyboardButton("📁 Gofile.io", callback_data=f"start:{session_id}:gofile")
+        types.InlineKeyboardButton("🐝 Buzzheavier.com (Live Fast Stream)", callback_data=f"start:{session_id}:buzzheavier"),
+        types.InlineKeyboardButton("📁 Gofile.io (Fast Direct Download)", callback_data=f"start:{session_id}:gofile"),
+        types.InlineKeyboardButton("⚔️ VikingFile.com (Resumable + Pause/Resume)", callback_data=f"start:{session_id}:vikingfile"),
+        types.InlineKeyboardButton("← Back to Selection", callback_data=f"back_select:{session_id}")
     )
-    kb.add(types.InlineKeyboardButton("← Back to Selection", callback_data=f"back_select:{session_id}"))
     return kb
 
-def build_streaming_keyboard(session_id: str, is_paused: bool = False) -> types.InlineKeyboardMarkup:
-    """Construct keyboard with Stop button during live transfer."""
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}"))
+def build_streaming_keyboard(session_id: str, is_paused: bool = False, destination: str = "") -> types.InlineKeyboardMarkup:
+    """Construct keyboard with Pause / Continue and Stop buttons during live transfer."""
+    session = sessions.get(session_id)
+    dest = destination or (session.get("destination", "") if session else "")
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    if dest == "vikingfile":
+        if is_paused:
+            kb.add(
+                types.InlineKeyboardButton("▶️ Continue", callback_data=f"resume:{session_id}"),
+                types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}")
+            )
+        else:
+            kb.add(
+                types.InlineKeyboardButton("⏸️ Pause", callback_data=f"pause:{session_id}"),
+                types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}")
+            )
+    else:
+        # Hosts that do not support resume (Buzzheavier, Gofile) only show Stop
+        kb.add(types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}"))
     return kb
 
 def build_stop_confirm_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
@@ -603,7 +620,17 @@ def run_stream_pipeline(session_id: str, destination: str):
     selected_indices = sorted(list(session["selected"]))
     cancel_event = session["cancel_event"]
 
-    dest_display = "Buzzheavier.com" if destination == "buzzheavier" else "Gofile.io"
+    session["destination"] = destination
+    session["is_paused"] = False
+
+    if destination == "buzzheavier":
+        dest_display = "Buzzheavier.com"
+    elif destination == "gofile":
+        dest_display = "Gofile.io"
+    elif destination == "vikingfile":
+        dest_display = "VikingFile.com"
+    else:
+        dest_display = destination.title()
 
     files_to_stream = [f for f in session["files"] if f["index"] in selected_indices]
     total_files = len(files_to_stream)
@@ -660,7 +687,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"<i>⚡ Preparing live RAM buffer before cloud stream starts...</i>"
                     )
                     session["last_rendered_text"] = text
-                    safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id))
+                    safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=False, destination=destination))
                     return
 
                 transferred = ev.get("transferred", 0)
@@ -668,8 +695,12 @@ def run_stream_pipeline(session_id: str, destination: str):
                 pct = (transferred / total * 100.0) if total > 0 else 0.0
                 eta = ev.get("eta", 0.0)
 
+                is_p = session.get("is_paused", False) or ev.get("isPaused", False)
+                header_title = f"{EMOJI_PAUSE} <b>TRANSFER PAUSED</b>" if is_p else f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>"
+                footer_line = "<i>⏸️ Transfer is paused. Tap Continue to resume.</i>" if is_p else "<i>⚡ Direct live transfer in progress...</i>"
+
                 text = (
-                    f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>\n"
+                    f"{header_title}\n"
                     f"{SEP}\n"
                     f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                     f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
@@ -683,10 +714,10 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"{EMOJI_PEERS} <b>Peers:</b> <code>{peers} connected</code>\n"
                     f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
                     f"{SEP}\n"
-                    f"<i>⚡ Direct live transfer in progress...</i>"
+                    f"{footer_line}"
                 )
                 session["last_rendered_text"] = text
-                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id))
+                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=is_p, destination=destination))
 
             # Initial message
             init_text = (
@@ -702,7 +733,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 chat_id,
                 message_id,
                 init_text,
-                reply_markup=build_streaming_keyboard(session_id),
+                reply_markup=build_streaming_keyboard(session_id, is_paused=False, destination=destination),
             )
 
             # Auto-retry logic (up to 3 retries) if upload connection is dropped by host or timed out
@@ -777,7 +808,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"<i>⚡ Re-establishing transfer pipe and resuming...</i>"
                     )
                     session["last_rendered_text"] = retry_msg
-                    safe_edit_message(chat_id, message_id, retry_msg, reply_markup=build_streaming_keyboard(session_id))
+                    safe_edit_message(chat_id, message_id, retry_msg, reply_markup=build_streaming_keyboard(session_id, is_paused=False, destination=destination))
                     time.sleep(3)
                     continue
                 else:
@@ -1402,7 +1433,7 @@ def render_start_text(user_id: int, user_name: str) -> str:
         f"{SEP}\n"
         f"<blockquote>{EMOJI_USER} <b>User:</b> {clean_name}\n"
         f"{EMOJI_SPEED} <b>Engine:</b> <code>tDownUp Transfer Core V2</code>\n"
-        f"{EMOJI_GLOBE} <b>Supported Hosts:</b> <code>Buzzheavier.com</code> & <code>Gofile.io</code></blockquote>\n"
+        f"{EMOJI_GLOBE} <b>Supported Hosts:</b> <code>Buzzheavier</code>, <code>Gofile</code> & <code>VikingFile</code></blockquote>\n"
         f"{SEP}\n"
         f"<b>tDownUp</b> allows you to download torrent files and magnet links directly to cloud storage at maximum speeds.\n\n"
         f"📥 <b>HOW TO USE:</b>\n"
@@ -2425,6 +2456,54 @@ def handle_callbacks(call: types.CallbackQuery):
         session["status"] = "running"
         threading.Thread(target=run_stream_pipeline, args=(session_id, destination), daemon=True).start()
 
+    elif action == "pause":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.pause()
+            session["is_paused"] = True
+            bot.answer_callback_query(call.id, "⏸️ Transfer paused.")
+            last_text = session.get("last_rendered_text", "")
+            dest = session.get("destination", "")
+            if last_text:
+                paused_text = last_text.replace("TRANSFER IN PROGRESS", "TRANSFER PAUSED")
+                paused_text = paused_text.replace("⚡ Direct live transfer in progress...", "⏸️ Transfer is paused. Tap Continue to resume.")
+                session["last_rendered_text"] = paused_text
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    paused_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=True, destination=dest)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
+    elif action == "resume":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.resume()
+            session["is_paused"] = False
+            bot.answer_callback_query(call.id, "▶️ Resuming transfer...")
+            last_text = session.get("last_rendered_text", "")
+            dest = session.get("destination", "")
+            if last_text:
+                resumed_text = last_text.replace("TRANSFER PAUSED", "TRANSFER IN PROGRESS")
+                resumed_text = resumed_text.replace("⏸️ Transfer is paused. Tap Continue to resume.", "⚡ Direct live transfer in progress...")
+                session["last_rendered_text"] = resumed_text
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    resumed_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=False, destination=dest)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
     elif action == "confirm_stop":
         session_id = parts[1] if len(parts) > 1 else ""
         session = sessions.get(session_id)
@@ -2467,19 +2546,21 @@ def handle_callbacks(call: types.CallbackQuery):
         if session:
             bot.answer_callback_query(call.id, "↩️ Returned to transfer.")
             last_text = session.get("last_rendered_text")
+            is_p = session.get("is_paused", False)
+            dest = session.get("destination", "")
             if last_text:
                 safe_edit_message(
                     session["chat_id"],
                     session["message_id"],
                     last_text,
-                    reply_markup=build_streaming_keyboard(session_id)
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=is_p, destination=dest)
                 )
             else:
                 safe_edit_message(
                     session["chat_id"],
                     session["message_id"],
                     f"⏸️ <b>TRANSFER PAUSED</b>\n{SEP}\n<i>Transfer is paused. Tap <b>Continue</b> below to resume.</i>",
-                    reply_markup=build_streaming_keyboard(session_id, is_paused=True)
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=True, destination=dest)
                 )
         else:
             bot.answer_callback_query(call.id, "Session expired.")
@@ -2520,7 +2601,7 @@ def print_anya_banner(bot_info):
         (f"  {CYAN}*{RESET} {BOLD}Bot ID:{RESET}      {WHITE}{bot_id}{RESET}", len(f"  * Bot ID:      {bot_id}")),
         (f"  {CYAN}*{RESET} {BOLD}Admin:{RESET}       {YELLOW}{admin_display}{RESET}", len(f"  * Admin:       {admin_display}")),
         (f"  {CYAN}*{RESET} {BOLD}Bot Mode:{RESET}    {MAGENTA}{mode}{RESET}", len(f"  * Bot Mode:    {mode}")),
-        (f"  {CYAN}*{RESET} {BOLD}Hosts:{RESET}       {CYAN}Buzzheavier.com & Gofile.io{RESET}", len("  * Hosts:       Buzzheavier.com & Gofile.io")),
+        (f"  {CYAN}*{RESET} {BOLD}Hosts:{RESET}       {CYAN}Buzzheavier, Gofile & VikingFile{RESET}", len("  * Hosts:       Buzzheavier, Gofile & VikingFile")),
     ]
 
     for line_str, raw_len in lines:

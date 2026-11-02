@@ -148,10 +148,13 @@ class StreamManager:
 
         buzz_acc = db.get_setting("buzzheavier_account_id", "")
         gofile_tok = db.get_setting("gofile_api_token", "")
+        viking_tok = db.get_setting("vikingfile_user_hash", "")
         if destination.lower() == "buzzheavier" and buzz_acc:
             cmd.extend(["--account-id", buzz_acc])
         elif destination.lower() == "gofile" and gofile_tok:
             cmd.extend(["--gofile-token", gofile_tok])
+        elif destination.lower() == "vikingfile" and viking_tok:
+            cmd.extend(["--viking-token", viking_tok])
 
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
