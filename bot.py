@@ -654,8 +654,6 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
     try:
         total_uploaded_bytes = sum(sz_b for (_, _, _, sz_b) in uploaded_results)
         total_sz_str = human_readable_size(total_uploaded_bytes)
-        clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
-        links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
 
         # Prepare table preview (Telegram limits Rich Messages to 32,768 chars and 500 blocks)
         # Cap table preview to 100 rows so large batches (e.g. 500-1000 files) never fail or exceed limits.
@@ -691,45 +689,55 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
             else f"📁 Download Links ({len(uploaded_results)} Files - Previewing {max_table_rows})"
         )
 
-        rich_msg = {
+        blocks = []
+        files = None
+        has_batch_doc = len(uploaded_results) > 1
+
+        # Only attach the _Links.txt document file if there are 2 or more files in the batch
+        if has_batch_doc:
+            clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
+            links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
+            blocks.append({
+                "type": "document",
+                "document": {
+                    "type": "document",
+                    "media": "attach://doc"
+                }
+            })
+            files = {
+                'doc': (clean_doc_name, links_doc, 'text/plain')
+            }
+
+        blocks.append({
+            "type": "paragraph",
+            "text": [
+                "🎉 ", {"type": "bold", "text": "TORRENT TRANSFER COMPLETED\n"},
+                f"{SEP}\n",
+                "📁 ", {"type": "bold", "text": "Torrent: "}, torrent_name + "\n",
+                "📦 ", {"type": "bold", "text": "Total Size: "}, f"{total_sz_str} ({len(uploaded_results)} files)\n",
+                "🌐 ", {"type": "bold", "text": "Host: "}, dest_display + "\n",
+                "👤 ", {"type": "bold", "text": "Uploaded By: "}, user_tag + "\n",
+                f"{SEP}"
+            ]
+        })
+
+        blocks.append({
+            "type": "details",
+            "summary": summary_text,
             "blocks": [
                 {
-                    "type": "document",
-                    "document": {
-                        "type": "document",
-                        "media": "attach://doc"
-                    }
-                },
-                {
-                    "type": "paragraph",
-                    "text": [
-                        "🎉 ", {"type": "bold", "text": "TORRENT TRANSFER COMPLETED\n"},
-                        f"{SEP}\n",
-                        "📁 ", {"type": "bold", "text": "Torrent: "}, torrent_name + "\n",
-                        "📦 ", {"type": "bold", "text": "Total Size: "}, f"{total_sz_str} ({len(uploaded_results)} files)\n",
-                        "🌐 ", {"type": "bold", "text": "Host: "}, dest_display + "\n",
-                        "👤 ", {"type": "bold", "text": "Uploaded By: "}, user_tag + "\n",
-                        f"{SEP}"
-                    ]
-                },
-                {
-                    "type": "details",
-                    "summary": summary_text,
-                    "blocks": [
-                        {
-                            "type": "table",
-                            "cells": table_cells,
-                            "is_bordered": True,
-                            "is_striped": True
-                        }
-                    ]
+                    "type": "table",
+                    "cells": table_cells,
+                    "is_bordered": True,
+                    "is_striped": True
                 }
             ]
+        })
+
+        rich_msg = {
+            "blocks": blocks
         }
 
-        files = {
-            'doc': (clean_doc_name, links_doc, 'text/plain')
-        }
         data = {
             'chat_id': str(chat_id),
             'rich_message': json.dumps(rich_msg, ensure_ascii=True)
@@ -743,11 +751,15 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
 
         token = getattr(bot, "token", BOT_TOKEN)
         url = f"https://api.telegram.org/bot{token}/sendRichMessage"
+        req_kwargs = {"data": data, "timeout": 30}
+        if files:
+            req_kwargs["files"] = files
+
         try:
-            resp = requests.post(url, data=data, files=files, timeout=30)
+            resp = requests.post(url, **req_kwargs)
         except requests.exceptions.SSLError:
             # Handles proxy, VPN, or antivirus SSL interception that causes self-signed certificate errors
-            resp = requests.post(url, data=data, files=files, timeout=30, verify=False)
+            resp = requests.post(url, **req_kwargs, verify=False)
 
         res_data = resp.json()
         if res_data.get("ok"):
