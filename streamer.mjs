@@ -331,13 +331,15 @@ if (getMetadata) {
         }
 
         // Deselect other files so WebTorrent concentrates 100% on the selected file
-        for (let i = 0; i < torrent.files.length; i++) {
-            if (i !== fileIndex) {
-                torrent.files[i].deselect();
-            }
+        if (typeof torrent.deselect === 'function') {
+            torrent.deselect(0, torrent.pieces.length - 1, false);
         }
         const file = torrent.files[fileIndex];
         file.select();
+        if (typeof torrent.critical === 'function' && typeof file._startPiece === 'number') {
+            const endCrit = Math.min(file._endPiece, file._startPiece + 1);
+            torrent.critical(file._startPiece, endCrit);
+        }
         const totalSize = file.length;
 
         console.log(JSON.stringify({
@@ -608,13 +610,29 @@ if (getMetadata) {
                 clearInterval(bufferingInterval);
                 return;
             }
+            let pLen = torrent.pieceLength || (4 * 1024 * 1024);
+            let buffered = 0;
+            try {
+                if (file && typeof file._startPiece === 'number') {
+                    const startIdx = file._startPiece;
+                    if (torrent.pieces && startIdx === torrent.pieces.length - 1 && torrent.lastPieceLength) {
+                        pLen = torrent.lastPieceLength;
+                    }
+                    if (torrent.bitfield && torrent.bitfield.get(startIdx)) {
+                        buffered = pLen;
+                    } else if (torrent.pieces && torrent.pieces[startIdx]) {
+                        buffered = Math.max(0, pLen - (torrent.pieces[startIdx].missing || 0));
+                    }
+                }
+            } catch (_) {}
+
             console.log(JSON.stringify({
                 type: 'progress',
                 phase: 'buffering',
                 transferred: 0,
                 total: totalSize,
-                bufferedBytes: torrent.downloaded,
-                pieceLength: torrent.pieceLength,
+                bufferedBytes: buffered,
+                pieceLength: pLen,
                 speed: torrent.downloadSpeed,
                 eta: 0,
                 peers: torrent.numPeers,

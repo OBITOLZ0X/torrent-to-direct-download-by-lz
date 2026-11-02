@@ -641,6 +641,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                 if phase == "buffering":
                     buf_bytes = ev.get("bufferedBytes", 0)
                     piece_len = ev.get("pieceLength", 1) or 1
+                    buf_bytes = min(buf_bytes, piece_len)
                     buf_pct = min(100.0, (buf_bytes / piece_len * 100.0)) if piece_len > 0 else 0.0
                     text = (
                         f"{EMOJI_STREAM_DOWN} <b>BUFFERING INITIAL PIECE IN RAM...</b>\n"
