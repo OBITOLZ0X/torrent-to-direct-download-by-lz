@@ -715,6 +715,7 @@ if (getMetadata) {
             }
 
             function createPartPut(url, pLen) {
+                let partError = null;
                 const u = new URL(url);
                 const pass = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
                 const promise = new Promise((resolve, reject) => {
