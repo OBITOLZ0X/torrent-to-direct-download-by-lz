@@ -657,6 +657,12 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
         clean_doc_name = re.sub(r'[\\/*?:"<>|]', "_", torrent_name)[:45].strip() + "_Links.txt"
         links_doc = build_links_text_file(torrent_name, dest_display, uploaded_results)
 
+        # Prepare table preview (Telegram limits Rich Messages to 32,768 chars and 500 blocks)
+        # Cap table preview to 100 rows so large batches (e.g. 500-1000 files) never fail or exceed limits.
+        # All 1000 files are always fully preserved in the embedded _Links.txt file at the top!
+        max_table_rows = 100
+        table_items = uploaded_results[:max_table_rows]
+
         table_cells = [
             [
                 {"text": "Name", "is_header": True, "align": "center"},
@@ -664,12 +670,26 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
                 {"text": "Download", "is_header": True, "align": "center"}
             ]
         ]
-        for fname, url, sz_str, _ in uploaded_results:
+        for fname, url, sz_str, _ in table_items:
             table_cells.append([
                 {"text": fname, "align": "left"},
                 {"text": sz_str, "align": "center"},
                 {"text": {"type": "url", "text": "Download 📥", "url": url}, "align": "center"}
             ])
+
+        if len(uploaded_results) > max_table_rows:
+            remaining = len(uploaded_results) - max_table_rows
+            table_cells.append([
+                {"text": f"... +{remaining} more files", "align": "left"},
+                {"text": "Full Batch", "align": "center"},
+                {"text": "In File ⬆️", "align": "center"}
+            ])
+
+        summary_text = (
+            f"📁 Download Links ({len(uploaded_results)} Files)"
+            if len(uploaded_results) <= max_table_rows
+            else f"📁 Download Links ({len(uploaded_results)} Files - Previewing {max_table_rows})"
+        )
 
         rich_msg = {
             "blocks": [
@@ -694,7 +714,7 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
                 },
                 {
                     "type": "details",
-                    "summary": f"📁 Download Links ({len(uploaded_results)} Files)",
+                    "summary": summary_text,
                     "blocks": [
                         {
                             "type": "table",
