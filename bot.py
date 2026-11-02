@@ -786,6 +786,13 @@ def run_stream_pipeline(session_id: str, destination: str):
                 if cancel_event.is_set():
                     break
 
+                # If transfer is paused by user, wait until user resumes!
+                while session.get("is_paused", False) and not cancel_event.is_set():
+                    time.sleep(0.5)
+
+                if cancel_event.is_set():
+                    break
+
                 ok, result = stream_mgr.stream_file(
                     torrent_source=torrent_path,
                     file_zero_index=zero_idx,
@@ -797,6 +804,12 @@ def run_stream_pipeline(session_id: str, destination: str):
 
                 if ok or cancel_event.is_set():
                     break
+
+                # If the stream exited while user had it on pause, wait for resume without consuming attempt
+                if session.get("is_paused", False):
+                    while session.get("is_paused", False) and not cancel_event.is_set():
+                        time.sleep(0.5)
+                    continue
 
                 err_raw = str(result)
                 err_detail = err_raw

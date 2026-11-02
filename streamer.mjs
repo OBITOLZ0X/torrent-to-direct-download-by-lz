@@ -24,6 +24,20 @@ process.on('uncaughtException', (err) => {
     process.exit(1);
 });
 
+process.on('unhandledRejection', (reason) => {
+    const msg = reason?.message || String(reason);
+    if (
+        msg.includes('socket hang up') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('EPIPE') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('connection lost')
+    ) {
+        return;
+    }
+    console.error(JSON.stringify({ type: 'error', message: `Unhandled rejection: ${msg}` }));
+});
+
 // Parse CLI arguments
 const args = process.argv.slice(2);
 let source = '';
@@ -724,7 +738,9 @@ if (getMetadata) {
                                 const etag = rawEtag.replace(/"/g, '');
                                 resolve(etag);
                             } else {
-                                reject(new Error(`VikingFile PUT part failed HTTP ${res.statusCode}: ${body}`));
+                                const e = new Error(`VikingFile PUT part failed HTTP ${res.statusCode}: ${body}`);
+                                partError = e;
+                                reject(e);
                             }
                         });
                     });
@@ -739,13 +755,18 @@ if (getMetadata) {
                                              err.code === 'ECONNRESET' ||
                                              err.code === 'ETIMEDOUT' ||
                                              err.message?.includes('timed out');
-                        reject(new Error(isConnClosed ? `VikingFile upload connection lost: ${err.message}` : err.message));
+                        const e = new Error(isConnClosed ? `VikingFile upload connection lost: ${err.message}` : err.message);
+                        partError = e;
+                        reject(e);
                     });
 
                     pass.pipe(req);
                 });
 
-                return { pass, promise };
+                // Attach no-op catch to prevent unhandled rejection crashes while in-flight
+                promise.catch(() => {});
+
+                return { pass, promise, getError: () => partError };
             }
 
             const etags = [];
@@ -784,6 +805,12 @@ if (getMetadata) {
                 for await (const chunk of getChunks()) {
                     while (isStreamPaused) {
                         await new Promise(r => setTimeout(r, 200));
+                    }
+
+                    if (activePart.getError()) {
+                        // S3 closed idle connection while transfer was paused: re-open activePart cleanly
+                        activePart = createPartPut(urls[currentPartIdx], getPartLength(currentPartIdx));
+                        bytesInCurrentPart = 0;
                     }
 
                     bytesReadFromTorrent += chunk.length;
