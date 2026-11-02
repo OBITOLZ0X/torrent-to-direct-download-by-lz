@@ -5,7 +5,7 @@ import time
 import uuid
 import html
 import json
-import urllib.request
+import requests
 import threading
 from typing import Dict, Optional, Any
 
@@ -707,38 +707,32 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
             ]
         }
 
-        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
-        parts = [
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode("utf-8"),
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"rich_message\"\r\n\r\n{json.dumps(rich_msg, ensure_ascii=True)}\r\n".encode("utf-8"),
-        ]
-
+        files = {
+            'doc': (clean_doc_name, links_doc, 'text/plain')
+        }
+        data = {
+            'chat_id': str(chat_id),
+            'rich_message': json.dumps(rich_msg, ensure_ascii=True)
+        }
         if not is_channel:
-            reply_markup = {
+            data['reply_markup'] = json.dumps({
                 "inline_keyboard": [
                     [{"text": "☕ Support & Donate", "callback_data": "pub_show_donation"}]
                 ]
-            }
-            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"reply_markup\"\r\n\r\n{json.dumps(reply_markup, ensure_ascii=True)}\r\n".encode("utf-8"))
+            }, ensure_ascii=True)
 
-        parts.append(
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"{clean_doc_name}\"\r\nContent-Type: text/plain\r\n\r\n".encode("utf-8")
-            + links_doc
-            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        token = getattr(bot, "token", BOT_TOKEN)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendRichMessage",
+            data=data,
+            files=files,
+            timeout=30
         )
-
-        body = b"".join(parts)
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage",
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data.get("ok"):
-                return True
-            else:
-                print(f"[send_unified_completion_message] Telegram API error: {data}")
+        res_data = resp.json()
+        if res_data.get("ok"):
+            return True
+        else:
+            print(f"[send_unified_completion_message] Telegram API error: {res_data}")
     except Exception as e:
         print(f"[send_unified_completion_message] Exception: {e}")
     return False
