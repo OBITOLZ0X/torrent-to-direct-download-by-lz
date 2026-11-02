@@ -204,21 +204,9 @@ if (getMetadata) {
         const cmd = line.trim().toUpperCase();
         if (cmd === 'PAUSE') {
             isStreamPaused = true;
-            if (currentTorrent && typeof currentTorrent.pause === 'function') {
-                try { currentTorrent.pause(); } catch (_) {}
-            }
-            if (currentRawStream && typeof currentRawStream.pause === 'function') {
-                try { currentRawStream.pause(); } catch (_) {}
-            }
             console.log(JSON.stringify({ type: 'paused' }));
         } else if (cmd === 'RESUME') {
             isStreamPaused = false;
-            if (currentTorrent && typeof currentTorrent.resume === 'function') {
-                try { currentTorrent.resume(); } catch (_) {}
-            }
-            if (currentRawStream && typeof currentRawStream.resume === 'function') {
-                try { currentRawStream.resume(); } catch (_) {}
-            }
             console.log(JSON.stringify({ type: 'resumed' }));
         } else if (cmd === 'STOP') {
             if (client) {
@@ -257,10 +245,6 @@ if (getMetadata) {
             return queueMicrotask(() => cb(new Error('Chunk length must be ' + this.chunkLength)));
         }
         this.chunks.set(index, buf);
-        // Throttle swarm download if RAM buffer exceeds 20 pieces
-        if (this.chunks.size > 20 && currentTorrent && !currentTorrent.paused) {
-            currentTorrent.pause();
-        }
         queueMicrotask(() => cb(null));
     };
 
@@ -292,10 +276,6 @@ if (getMetadata) {
             if (idx < safePieceIndex) {
                 this.chunks.delete(idx);
             }
-        }
-        // Resume swarm download once RAM buffer has drained below 10 pieces
-        if (this.chunks.size < 10 && currentTorrent && currentTorrent.paused) {
-            currentTorrent.resume();
         }
     };
 
