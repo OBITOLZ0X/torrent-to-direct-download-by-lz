@@ -461,7 +461,17 @@ class DatabaseManager:
 
         bot_mode = self.get_setting("bot_mode", "admin_only")
         if bot_mode == "admin_only":
-            return False, "🔒 <b>MAINTENANCE:</b> The bot is currently in Admin-Only mode. Please check back later."
+            sep = "━━━━━━━━━━━━━━━━━━━━━"
+            msg = (
+                f"🛡️ <b>ADMIN MODE ACTIVE</b>\n"
+                f"{sep}\n"
+                f"<blockquote>🔒 <b>Service Temporarily Restricted</b>\n"
+                f"The bot is currently running in <b>Admin Mode</b> for scheduled system maintenance, core updates, or private administrative operations.\n\n"
+                f"⚡ <b>All Public Conversions & Transfers:</b> <code>PAUSED</code></blockquote>\n"
+                f"{sep}\n"
+                f"<i>💡 Please check back shortly. Public access will automatically resume as soon as administrative work is completed.</i>"
+            )
+            return False, msg
 
         if not self.is_registered(user_id):
             return False, "REGISTRATION_REQUIRED"

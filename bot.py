@@ -197,6 +197,64 @@ def is_user_transferring(user_id: int) -> bool:
                     return True
     return False
 
+def cancel_all_non_admin_transfers() -> int:
+    """
+    Cancel and terminate all active transfers for non-admin users when Admin Mode is activated.
+    Updates in-progress messages with a sleek suspension card and sends a direct notice.
+    """
+    with sessions_lock:
+        active_sessions = list(sessions.items())
+
+    stopped_count = 0
+    for sess_id, s in active_sessions:
+        u_id = s.get("user_id")
+        if u_id and u_id != ADMIN_ID:
+            s["status"] = "admin_stopped"
+
+            # 1. Trigger cancellation & stop streamer
+            cancel_ev = s.get("cancel_event")
+            if cancel_ev:
+                cancel_ev.set()
+
+            ctrl = s.get("controller")
+            if ctrl:
+                try:
+                    ctrl.stop()
+                except Exception:
+                    pass
+
+            # 2. Update progress card message
+            chat_id = s.get("chat_id")
+            message_id = s.get("message_id")
+            torrent_name = s.get("torrent_name", "Torrent")
+
+            stopped_card = (
+                f"🛡️ <b>TRANSFER HALTED (ADMIN MODE)</b>\n"
+                f"{SEP}\n"
+                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                f"🔒 <b>Status:</b> <b>Transfer stopped by system</b>\n"
+                f"⚠️ <b>Reason:</b> Bot entered <b>Admin Maintenance Mode</b>.</blockquote>\n"
+                f"{SEP}\n"
+                f"<i>⚙️ All public conversions and transfers have been halted temporarily for administrative maintenance. You may restart your transfer once public service resumes.</i>"
+            )
+
+            if chat_id and message_id:
+                safe_edit_message(chat_id, message_id, stopped_card, reply_markup=None)
+                try:
+                    bot.send_message(
+                        chat_id,
+                        f"🛡️ <b>ADMIN MODE NOTIFICATION</b>\n{SEP}\n"
+                        f"<blockquote>Your active transfer for <code>{html.escape(torrent_name)}</code> was terminated because the bot was switched to <b>Admin Mode</b>.\n\n"
+                        f"<i>Please try again once regular public service resumes.</i></blockquote>\n{SEP}",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
+            stopped_count += 1
+
+    return stopped_count
+
 # Admin pending state for reply-based input prompts: admin_id -> {"action": "...", "mid": int, "cid": int, "return_menu": "..."}
 admin_pending: Dict[int, dict] = {}
 
@@ -1014,14 +1072,18 @@ def run_stream_pipeline(session_id: str, destination: str):
 
         # Final rendering
         if cancel_event.is_set():
-            cancel_text = (
-                f"🛑 <b>TRANSFER CANCELLED</b>\n"
-                f"{SEP}\n"
-                f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
-                f"⚠️ <b>Status:</b> Transfer cancelled by user request.</blockquote>\n"
-                f"{SEP}"
-            )
-            safe_edit_message(chat_id, message_id, cancel_text, reply_markup=None)
+            if session.get("status") == "admin_stopped":
+                # Message was already updated with professional Admin Mode card by cancel_all_non_admin_transfers
+                pass
+            else:
+                cancel_text = (
+                    f"🛑 <b>TRANSFER CANCELLED</b>\n"
+                    f"{SEP}\n"
+                    f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
+                    f"⚠️ <b>Status:</b> Transfer cancelled by user request.</blockquote>\n"
+                    f"{SEP}"
+                )
+                safe_edit_message(chat_id, message_id, cancel_text, reply_markup=None)
         else:
             user_tag = f"@{user_name}" if user_name and user_name != "user" else f"User {user_id}"
 
@@ -2271,6 +2333,7 @@ def handle_callbacks(call: types.CallbackQuery):
 
         elif data == "cfg_gh_remove_token":
             db.remove_github_token()
+            cancel_all_non_admin_transfers()
             bot.answer_callback_query(call.id, "Token removed. Reverted to Admin Only mode.", show_alert=True)
             text, kb = render_github_menu()
             safe_edit_message(cid, mid, text, reply_markup=kb)
@@ -2420,7 +2483,9 @@ def handle_callbacks(call: types.CallbackQuery):
         # ── Access Modes Operations (Strict Gatekeeper Constraint!) ──
         elif data == "cfg_set_mode_admin":
             ok, res = db.set_bot_mode("admin_only")
-            bot.answer_callback_query(call.id, "Switched to Admin Only mode.")
+            stopped = cancel_all_non_admin_transfers()
+            msg = f"Switched to Admin Only mode. Stopped {stopped} active user transfer(s)." if stopped > 0 else "Switched to Admin Only mode."
+            bot.answer_callback_query(call.id, msg, show_alert=(stopped > 0))
             text, kb = render_modes_menu()
             safe_edit_message(cid, mid, text, reply_markup=kb)
             return
@@ -2549,6 +2614,14 @@ def handle_callbacks(call: types.CallbackQuery):
     if not session:
         bot.answer_callback_query(call.id, "Session expired. Please send torrent again.", show_alert=True)
         return
+
+    # Restrict session interactions if bot is currently in Admin Mode
+    if user_id != ADMIN_ID:
+        allowed, reason = db.check_access(user_id, ADMIN_ID)
+        if not allowed:
+            bot.answer_callback_query(call.id, "🔒 The bot is currently in Admin Mode.", show_alert=True)
+            safe_edit_message(session["chat_id"], session["message_id"], reason, reply_markup=None)
+            return
 
     sess_chat_id = session["chat_id"]
     sess_message_id = session["message_id"]
