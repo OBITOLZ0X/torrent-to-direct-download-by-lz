@@ -231,14 +231,17 @@ class StreamManager:
                 pass
 
         proc.poll()
-        if proc.returncode != 0 and not result_url:
-            stderr_out = proc.stderr.read().strip()
-            return False, error_msg or stderr_out or "Transfer process exited unexpectedly."
+        stderr_out = ""
+        if proc.stderr:
+            try:
+                stderr_out = proc.stderr.read().strip()
+            except Exception:
+                pass
 
-        if result_url:
-            return True, result_url
+        if not result_url:
+            return False, error_msg or stderr_out or "Transfer process exited without returning a URL."
 
-        return False, error_msg or "Transfer finished without returning a URL."
+        return True, result_url
 
     def fetch_magnet_metadata(
         self,

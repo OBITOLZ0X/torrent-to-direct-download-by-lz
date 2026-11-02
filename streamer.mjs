@@ -6,6 +6,12 @@ import process from 'process';
 import readline from 'readline';
 import { PassThrough, Transform } from 'stream';
 
+function emitError(message, code = 'ERROR') {
+    const payload = JSON.stringify({ type: 'error', code, message });
+    console.log(payload);
+    console.error(payload);
+}
+
 // Global error protection to gracefully absorb benign WebTorrent internal swarm/peer race conditions
 process.on('uncaughtException', (err) => {
     const msg = err?.message || String(err);
@@ -20,7 +26,7 @@ process.on('uncaughtException', (err) => {
     ) {
         return;
     }
-    console.error(JSON.stringify({ type: 'error', message: `Streamer process error: ${msg}` }));
+    emitError(`Streamer process error: ${msg}`);
     process.exit(1);
 });
 
@@ -35,7 +41,7 @@ process.on('unhandledRejection', (reason) => {
     ) {
         return;
     }
-    console.error(JSON.stringify({ type: 'error', message: `Unhandled rejection: ${msg}` }));
+    emitError(`Unhandled rejection: ${msg}`);
 });
 
 // Parse CLI arguments
@@ -521,7 +527,9 @@ if (getMetadata) {
         // ─────────────────────────────────────────────
         async function startGofileUpload(firstChunk, rawStream) {
             const servers = await getGofileServers();
-            const serverName = servers[0] || 'store-eu-par-5';
+            const serverName = (servers && servers.length > 0)
+                ? servers[Math.floor(Math.random() * servers.length)]
+                : 'store-eu-par-5';
 
             const form = new FormData();
             form.append('file', uploadStream.pipe(networkCounter), {
@@ -556,26 +564,27 @@ if (getMetadata) {
                     try {
                         const data = JSON.parse(body);
                         if (data.status === 'ok') {
-                            const page = data.data?.downloadPage || `https://gofile.io/d/${data.data?.parentFolderCode || ''}`;
-                            console.log(JSON.stringify({
-                                type: 'done',
-                                status: res.statusCode,
-                                destination: 'gofile',
-                                url: page
-                            }));
-                        } else {
-                            console.error(JSON.stringify({
-                                type: 'error',
-                                message: `Gofile API returned status: ${data.status}`
-                            }));
+                            const page = data.data?.downloadPage || (data.data?.parentFolderCode ? `https://gofile.io/d/${data.data.parentFolderCode}` : '');
+                            if (page) {
+                                console.log(JSON.stringify({
+                                    type: 'done',
+                                    status: res.statusCode,
+                                    destination: 'gofile',
+                                    url: page
+                                }));
+                                client.destroy(() => process.exit(0));
+                                return;
+                            }
                         }
+                        const errMsg = data.status
+                            ? `Gofile API returned: status=${data.status} ${JSON.stringify(data.data || {})}`
+                            : `Gofile unexpected response (HTTP ${res.statusCode}): ${body.slice(0, 250)}`;
+                        emitError(errMsg);
+                        client.destroy(() => process.exit(1));
                     } catch (e) {
-                        console.error(JSON.stringify({
-                            type: 'error',
-                            message: `Failed to parse Gofile response: ${body}`
-                        }));
+                        emitError(`Failed to parse Gofile response (HTTP ${res.statusCode}): ${body.slice(0, 250)}`);
+                        client.destroy(() => process.exit(1));
                     }
-                    client.destroy(() => process.exit(0));
                 });
             });
 
@@ -589,14 +598,7 @@ if (getMetadata) {
                                      err.code === 'ECONNRESET' ||
                                      err.code === 'ETIMEDOUT' ||
                                      err.message?.includes('timed out');
-                console.error(JSON.stringify({
-                    type: 'error',
-                    code: err.code || 'REQUEST_ERROR',
-                    isConnectionClosed: isConnClosed,
-                    message: isConnClosed
-                        ? `Gofile upload connection lost: ${err.message}`
-                        : `Gofile request error: ${err.message}`
-                }));
+                emitError(isConnClosed ? `Gofile upload connection lost: ${err.message}` : `Gofile request error: ${err.message}`);
                 client.destroy();
                 process.exit(1);
             });
@@ -642,6 +644,8 @@ if (getMetadata) {
                                 id: fileId,
                                 url: buzzUrl
                             }));
+                            client.destroy(() => process.exit(0));
+                            return;
                         } catch (e) {
                             console.log(JSON.stringify({
                                 type: 'done',
@@ -649,14 +653,12 @@ if (getMetadata) {
                                 destination: 'buzzheavier',
                                 raw: body
                             }));
+                            client.destroy(() => process.exit(0));
+                            return;
                         }
-                    } else {
-                        console.error(JSON.stringify({
-                            type: 'error',
-                            message: `Buzzheavier HTTP ${res.statusCode}: ${body}`
-                        }));
                     }
-                    client.destroy(() => process.exit(0));
+                    emitError(`Buzzheavier HTTP ${res.statusCode}: ${body.slice(0, 250)}`);
+                    client.destroy(() => process.exit(1));
                 });
             });
 
@@ -670,14 +672,7 @@ if (getMetadata) {
                                      err.code === 'ECONNRESET' ||
                                      err.code === 'ETIMEDOUT' ||
                                      err.message?.includes('timed out');
-                console.error(JSON.stringify({
-                    type: 'error',
-                    code: err.code || 'REQUEST_ERROR',
-                    isConnectionClosed: isConnClosed,
-                    message: isConnClosed
-                        ? `Buzzheavier upload connection lost: ${err.message}`
-                        : `Buzzheavier request error: ${err.message}`
-                }));
+                emitError(isConnClosed ? `Buzzheavier upload connection lost: ${err.message}` : `Buzzheavier request error: ${err.message}`);
                 client.destroy();
                 process.exit(1);
             });
@@ -866,10 +861,7 @@ if (getMetadata) {
                 client.destroy(() => process.exit(0));
             } catch (err) {
                 clearInterval(progressInterval);
-                console.error(JSON.stringify({
-                    type: 'error',
-                    message: `VikingFile stream error: ${err.message}`
-                }));
+                emitError(`VikingFile stream error: ${err.message}`);
                 client.destroy();
                 process.exit(1);
             }
