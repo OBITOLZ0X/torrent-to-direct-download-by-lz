@@ -73,6 +73,7 @@ EMOJI_HEART       = '<tg-emoji emoji-id="5116368680279606270">♥️</tg-emoji>'
 EMOJI_WAVE        = '<tg-emoji emoji-id="4918354603281482671">👋</tg-emoji>'
 EMOJI_SPARK       = '<tg-emoji emoji-id="5104960787579929462">✨</tg-emoji>'
 EMOJI_LOCK        = '<tg-emoji emoji-id="4904500559203009298">🔒</tg-emoji>'
+EMOJI_PAUSE       = '⏸️'
 
 GITHUB_HELP_TEXT = (
     f"🔑 <b>HOW TO GET A GITHUB TOKEN</b>\n{SEP}\n"
