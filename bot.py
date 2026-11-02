@@ -722,12 +722,13 @@ def send_unified_completion_message(chat_id: Any, torrent_name: str, dest_displa
             }, ensure_ascii=True)
 
         token = getattr(bot, "token", BOT_TOKEN)
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendRichMessage",
-            data=data,
-            files=files,
-            timeout=30
-        )
+        url = f"https://api.telegram.org/bot{token}/sendRichMessage"
+        try:
+            resp = requests.post(url, data=data, files=files, timeout=30)
+        except requests.exceptions.SSLError:
+            # Handles proxy, VPN, or antivirus SSL interception that causes self-signed certificate errors
+            resp = requests.post(url, data=data, files=files, timeout=30, verify=False)
+
         res_data = resp.json()
         if res_data.get("ok"):
             return True
