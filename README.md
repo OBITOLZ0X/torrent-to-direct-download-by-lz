@@ -55,7 +55,7 @@ The bot features a **pure live RAM transfer relay** — BitTorrent chunks are pi
 
 5. **Unified Completion Card**:
    - Receive direct download links in a single unified message bubble with a native scrollable table.
-   - Batches with 2+ files automatically include an attached batch `_Links.txt` file at the top for one-click import into download managers (IDM, JDownloader, 1DM).
+   - Batches with 2+ files automatically include an attached batch `_Links.txt` file at the top containing all file page links.
    - Single-file transfers cleanly display without redundant text file attachments.
    - Supports large torrents up to 1,000 files seamlessly.
 

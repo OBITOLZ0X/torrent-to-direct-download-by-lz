@@ -678,11 +678,11 @@ def build_links_presentation(uploaded_results: list, max_inline: int = 10) -> st
     return "<blockquote expandable>\n" + "\n".join(lines) + "\n</blockquote>"
 
 def build_links_text_file(torrent_name: str, host: str, uploaded_results: list) -> bytes:
-    """Generate a clean .txt file with all links formatted for download managers (IDM, JDownloader)."""
+    """Generate a clean .txt file with all uploaded file links."""
     total_sz = human_readable_size(sum(sz_b for (_, _, _, sz_b) in uploaded_results))
     content = [
         "============================================================",
-        f"  tDownUp - DIRECT DOWNLOAD LINKS",
+        f"  tDownUp - UPLOADED FILE LINKS",
         f"  Torrent: {torrent_name}",
         f"  Host:    {host}",
         f"  Files:   {len(uploaded_results)} files ({total_sz})",
@@ -695,7 +695,7 @@ def build_links_text_file(torrent_name: str, host: str, uploaded_results: list) 
         content.append(f"   Link: {url}\n")
 
     content.append("============================================================")
-    content.append("--- RAW LINKS (COPY ALL FOR IDM / JDOWNLOADER / 1DM) ---")
+    content.append("--- ALL LINKS ---")
     content.append("============================================================")
     for _, url, _, _ in uploaded_results:
         content.append(url)
@@ -1150,7 +1150,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         bot.send_document(
                             chat_id,
                             (clean_doc_name, links_doc),
-                            caption=f"📁 <b>Batch Download Links File:</b> <code>{clean_doc_name}</code>\n<i>Import into IDM, JDownloader, or 1DM to download all files at once.</i>",
+                            caption=f"📁 <b>Batch Links File:</b> <code>{clean_doc_name}</code>\n<i>Contains all {len(uploaded_results)} file links.</i>",
                             parse_mode="HTML"
                         )
                     except Exception as de:
