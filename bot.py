@@ -548,9 +548,25 @@ def build_destination_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     return kb
 
 def build_streaming_keyboard(session_id: str, is_paused: bool = False, destination: str = "") -> types.InlineKeyboardMarkup:
-    """Construct unified keyboard with Stop button during live transfer across all storage hosts."""
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}"))
+    """Construct keyboard with Pause / Continue and Stop buttons during live transfer."""
+    session = sessions.get(session_id)
+    dest = destination or (session.get("destination", "") if session else "")
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    if dest == "vikingfile":
+        if is_paused:
+            kb.add(
+                types.InlineKeyboardButton("▶️ Continue", callback_data=f"resume:{session_id}"),
+                types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}")
+            )
+        else:
+            kb.add(
+                types.InlineKeyboardButton("⏸️ Pause", callback_data=f"pause:{session_id}"),
+                types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}")
+            )
+    else:
+        # Hosts that do not support resume (Buzzheavier, Gofile) only show Stop
+        kb.add(types.InlineKeyboardButton("🛑 Stop Transfer", callback_data=f"confirm_stop:{session_id}"))
     return kb
 
 def build_stop_confirm_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
@@ -901,7 +917,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                         f"<i>⚡ Preparing live RAM buffer before cloud stream starts...</i>"
                     )
                     session["last_rendered_text"] = text
-                    safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id))
+                    safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=False, destination=destination))
                     return
 
                 transferred = ev.get("transferred", 0)
@@ -909,8 +925,12 @@ def run_stream_pipeline(session_id: str, destination: str):
                 pct = (transferred / total * 100.0) if total > 0 else 0.0
                 eta = ev.get("eta", 0.0)
 
+                is_p = session.get("is_paused", False) or ev.get("isPaused", False)
+                header_title = f"{EMOJI_PAUSE} <b>TRANSFER PAUSED</b>" if is_p else f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>"
+                footer_line = "<i>⏸️ Transfer is paused. Tap Continue to resume.</i>" if is_p else "<i>⚡ Direct live transfer in progress...</i>"
+
                 text = (
-                    f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>\n"
+                    f"{header_title}\n"
                     f"{SEP}\n"
                     f"<blockquote>📁 <b>Torrent:</b> <code>{html.escape(torrent_name)}</code>\n"
                     f"📄 <b>File ({step_num}/{total_files}):</b> <code>{html.escape(fname)}</code> (<code>{fsize_str}</code>)\n"
@@ -924,10 +944,10 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"{EMOJI_PEERS} <b>Peers:</b> <code>{peers} connected</code>\n"
                     f"📦 <b>Queue:</b> <code>File {step_num} of {total_files}</code></blockquote>\n"
                     f"{SEP}\n"
-                    f"<i>⚡ Direct live transfer in progress...</i>"
+                    f"{footer_line}"
                 )
                 session["last_rendered_text"] = text
-                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id))
+                safe_edit_message(chat_id, message_id, text, reply_markup=build_streaming_keyboard(session_id, is_paused=is_p, destination=destination))
 
             # Initial message
             init_text = (
@@ -2718,8 +2738,53 @@ def handle_callbacks(call: types.CallbackQuery):
         session["status"] = "running"
         threading.Thread(target=run_stream_pipeline, args=(session_id, destination), daemon=True).start()
 
-    elif action == "pause" or action == "resume":
-        bot.answer_callback_query(call.id, "Live memory streaming cannot be paused. Use Stop Transfer if you wish to cancel.", show_alert=True)
+    elif action == "pause":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.pause()
+            session["is_paused"] = True
+            bot.answer_callback_query(call.id, "⏸️ Transfer paused.")
+            last_text = session.get("last_rendered_text", "")
+            dest = session.get("destination", "")
+            if last_text:
+                paused_text = last_text.replace("TRANSFER IN PROGRESS", "TRANSFER PAUSED")
+                paused_text = paused_text.replace("⚡ Direct live transfer in progress...", "⏸️ Transfer is paused. Tap Continue to resume.")
+                session["last_rendered_text"] = paused_text
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    paused_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=True, destination=dest)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
+
+    elif action == "resume":
+        session_id = parts[1] if len(parts) > 1 else ""
+        session = sessions.get(session_id)
+        if session:
+            ctrl = session.get("controller")
+            if ctrl:
+                ctrl.resume()
+            session["is_paused"] = False
+            bot.answer_callback_query(call.id, "▶️ Resuming transfer...")
+            last_text = session.get("last_rendered_text", "")
+            dest = session.get("destination", "")
+            if last_text:
+                resumed_text = last_text.replace("TRANSFER PAUSED", "TRANSFER IN PROGRESS")
+                resumed_text = resumed_text.replace("⏸️ Transfer is paused. Tap Continue to resume.", "⚡ Direct live transfer in progress...")
+                session["last_rendered_text"] = resumed_text
+                safe_edit_message(
+                    session["chat_id"],
+                    session["message_id"],
+                    resumed_text,
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=False, destination=dest)
+                )
+        else:
+            bot.answer_callback_query(call.id, "Session expired.")
 
     elif action == "confirm_stop":
         session_id = parts[1] if len(parts) > 1 else ""
@@ -2763,12 +2828,14 @@ def handle_callbacks(call: types.CallbackQuery):
         if session:
             bot.answer_callback_query(call.id, "↩️ Returned to transfer.")
             last_text = session.get("last_rendered_text")
+            is_p = session.get("is_paused", False)
+            dest = session.get("destination", "")
             if last_text:
                 safe_edit_message(
                     session["chat_id"],
                     session["message_id"],
                     last_text,
-                    reply_markup=build_streaming_keyboard(session_id)
+                    reply_markup=build_streaming_keyboard(session_id, is_paused=is_p, destination=dest)
                 )
         else:
             bot.answer_callback_query(call.id, "Session expired.")
