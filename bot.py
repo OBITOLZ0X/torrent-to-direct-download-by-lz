@@ -481,9 +481,9 @@ def build_destination_keyboard(session_id: str) -> types.InlineKeyboardMarkup:
     """Construct keyboard allowing user to pick Buzzheavier, Gofile, or VikingFile."""
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
-        types.InlineKeyboardButton("🐝 Buzzheavier.com (Live Fast Stream)", callback_data=f"start:{session_id}:buzzheavier"),
-        types.InlineKeyboardButton("📁 Gofile.io (Fast Direct Download)", callback_data=f"start:{session_id}:gofile"),
-        types.InlineKeyboardButton("⚔️ VikingFile.com (Resumable + Pause/Resume)", callback_data=f"start:{session_id}:vikingfile"),
+        types.InlineKeyboardButton("🐝 Buzzheavier.com", callback_data=f"start:{session_id}:buzzheavier"),
+        types.InlineKeyboardButton("📁 Gofile.io", callback_data=f"start:{session_id}:gofile"),
+        types.InlineKeyboardButton("⚔️ VikingFile.com", callback_data=f"start:{session_id}:vikingfile"),
         types.InlineKeyboardButton("← Back to Selection", callback_data=f"back_select:{session_id}")
     )
     return kb

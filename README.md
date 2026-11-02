@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>High-Speed Torrent & Magnet to Direct Cloud Transfer Telegram Bot</b><br>
-  <i>Direct live in-memory transfer pipe to Buzzheavier and Gofile with zero permanent disk footprint!</i>
+  <i>Direct live in-memory transfer pipe to Buzzheavier, Gofile, and VikingFile with zero permanent disk footprint!</i>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@ Experience **tDownUp** directly on Telegram right now without installing anythin
 
 ## 📖 What is tDownUp?
 
-**tDownUp** is an ultra-fast Telegram Bot built with Python (`pyTelegramBotAPI`) and Node.js (`WebTorrent`) that enables users to convert BitTorrent magnet links or `.torrent` files directly into high-speed direct download links on **[Buzzheavier.com](https://buzzheavier.com)** and **[Gofile.io](https://gofile.io)**.
+**tDownUp** is an ultra-fast Telegram Bot built with Python (`pyTelegramBotAPI`) and Node.js (`WebTorrent`) that enables users to convert BitTorrent magnet links or `.torrent` files directly into high-speed direct download links on **[Buzzheavier.com](https://buzzheavier.com)**, **[Gofile.io](https://gofile.io)**, and **[VikingFile.com](https://vikingfile.com)**.
 
 The bot features a **pure live RAM transfer relay** — BitTorrent chunks are piped directly to the cloud storage API without writing temporary files to local disk.
 
@@ -47,13 +47,17 @@ The bot features a **pure live RAM transfer relay** — BitTorrent chunks are pi
    - Use **`Select All`** or **`Deselect All`** for fast selection.
 
 3. **Choose Destination**:
-   - Tap **`🐝 Buzzheavier`** or **`📁 Gofile.io`**.
+   - Tap **`🐝 Buzzheavier.com`**, **`📁 Gofile.io`**, or **`⚔️ VikingFile.com`**.
 
 4. **Live Transfer Dashboard**:
    - Watch live transfer speed, progress bar, ETA, and connected peer count.
    - Click **`🛑 Stop Transfer`** at any time with safe confirmation.
-   - Upon completion, receive direct high-speed download links.
-   - Check account limits with `/account` or support hosting with `/donate`.
+
+5. **Unified Completion Card**:
+   - Receive direct download links in a single unified message bubble with a native scrollable table.
+   - Batches with 2+ files automatically include an attached batch `_Links.txt` file at the top for one-click import into download managers (IDM, JDownloader, 1DM).
+   - Single-file transfers cleanly display without redundant text file attachments.
+   - Supports large torrents up to 1,000 files seamlessly.
 
 ---
 
@@ -70,6 +74,16 @@ Applied automatically to maintain server stability and fair bandwidth distributi
 ---
 
 ## ✨ Architecture & Core Features
+
+### 🚀 Direct Live RAM Streaming (Zero Disk Footprint)
+- BitTorrent pieces are held in an in-memory sliding window and streamed straight to cloud storage HTTP sockets.
+- No temporary files are saved to the server's hard drive or SSD.
+- Supports files up to 40 GB with strict memory caps (~64 MB – 100 MB RAM).
+
+### 📄 Unified Rich Completion Bubble
+- Merges the batch `.txt` document, torrent transfer metadata, and expandable file list table into **one single message bubble**.
+- Telegram native vertical and horizontal scrolling without manual bot pagination buttons.
+- Smart preview limits: Displays the first 100 files in the inline table while embedding all 1,000 files in the `.txt` document.
 
 ### 🐙 Local-First GitHub Cloud Database
 - **Zero local `config.json`**: All settings and user database sync in real-time to a private GitHub repository (`database.json`).
