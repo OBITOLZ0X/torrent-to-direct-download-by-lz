@@ -238,8 +238,12 @@ class StreamManager:
             except Exception:
                 pass
 
-        if not result_url:
+        if not result_url or not isinstance(result_url, str):
             return False, error_msg or stderr_out or "Transfer process exited without returning a URL."
+
+        clean_url = result_url.strip().rstrip("/")
+        if not clean_url.startswith("http") or clean_url in ("https://vikingfile.com/f", "http://vikingfile.com/f", "https://buzzheavier.com/f", "https://gofile.io/d") or clean_url.endswith("/f") or clean_url.endswith("/d"):
+            return False, error_msg or stderr_out or f"Transfer completed with incomplete or invalid file URL: {result_url}"
 
         return True, result_url
 

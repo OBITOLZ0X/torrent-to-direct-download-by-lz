@@ -397,6 +397,10 @@ if (getMetadata) {
                 res.on('end', () => {
                     try {
                         const data = JSON.parse(body);
+                        if (!data || data.error || (!data.url && !data.hash)) {
+                            const errMsg = (data && data.error) ? data.error : `Invalid response from VikingFile complete-upload: ${body}`;
+                            return reject(new Error(errMsg));
+                        }
                         resolve(data);
                     } catch (e) {
                         reject(new Error(`Failed to parse VikingFile complete-upload response: ${body}`));
@@ -849,8 +853,15 @@ if (getMetadata) {
 
                 clearInterval(progressInterval);
 
+                if (!etags || etags.length !== numberParts) {
+                    throw new Error(`Incomplete multipart upload: only ${etags ? etags.length : 0} of ${numberParts} parts were uploaded.`);
+                }
+
                 const compResult = await completeVikingUpload(uploadInfo, etags, file.name, vikingToken);
-                const pageUrl = compResult.url || `https://vikingfile.com/f/${compResult.hash || ''}`;
+                const pageUrl = compResult.url || (compResult.hash ? `https://vikingfile.com/f/${compResult.hash}` : '');
+                if (!pageUrl || pageUrl.trim() === 'https://vikingfile.com/f/' || pageUrl.trim().endsWith('/f/')) {
+                    throw new Error(`VikingFile returned an invalid or empty file URL: ${JSON.stringify(compResult)}`);
+                }
                 console.log(JSON.stringify({
                     type: 'done',
                     status: 200,
