@@ -1210,7 +1210,7 @@ def process_torrent_source(message: types.Message, magnet_link: str = None, torr
         )
         return
 
-    # 2. Early quota check (5 torrents / 100 GB daily limit)
+    # 2. Early quota check (5 torrents / 200 GB daily limit)
     ok, reason = db.check_user_can_request(user_id, ADMIN_ID)
     if not ok:
         bot.reply_to(message, reason)
@@ -1742,8 +1742,8 @@ def handle_account(message: types.Message):
     is_admin = (user_id == ADMIN_ID)
 
     daily_limit = int(db.get_setting("daily_limit_regular", 5))
-    max_size_gb = float(db.get_setting("max_size_gb_regular", 40.0))
-    daily_bw_gb = float(db.get_setting("daily_bandwidth_gb_regular", 100.0))
+    max_size_gb = float(db.get_setting("max_size_gb_regular", 100.0))
+    daily_bw_gb = float(db.get_setting("daily_bandwidth_gb_regular", 200.0))
 
     today = db._today_str()
     if info.get("today_date") != today:
@@ -2538,7 +2538,7 @@ def handle_callbacks(call: types.CallbackQuery):
                 cid, mid,
                 action="set_max_size",
                 title="MAX SINGLE FILE SIZE (GB)",
-                instructions="Enter maximum single file size in GB for regular users (e.g. <code>40.0</code>):",
+                instructions="Enter maximum single file size in GB for regular users (e.g. <code>100.0</code>):",
                 return_menu="limits"
             )
             bot.answer_callback_query(call.id)
@@ -2549,7 +2549,7 @@ def handle_callbacks(call: types.CallbackQuery):
                 cid, mid,
                 action="set_daily_bw",
                 title="DAILY TOTAL BANDWIDTH (GB)",
-                instructions="Enter maximum total daily bandwidth in GB for regular users (e.g. <code>100.0</code>):",
+                instructions="Enter maximum total daily bandwidth in GB for regular users (e.g. <code>200.0</code>):",
                 return_menu="limits"
             )
             bot.answer_callback_query(call.id)

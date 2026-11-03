@@ -67,8 +67,8 @@ Applied automatically to maintain server stability and fair bandwidth distributi
 
 - 🔒 **Single Concurrent Transfer:** A user cannot start another transfer until their active transfer finishes.
 - 🔢 **Daily Torrents Quota:** Up to **5 torrents per day** per user.
-- 📦 **Max Single File Size:** Maximum **40 GB** for any single file.
-- 🌐 **Daily Bandwidth Limit:** Up to **100 GB** total bandwidth per day across all torrents.
+- 📦 **Max Single File Size:** Maximum **100 GB** for any single file.
+- 🌐 **Daily Bandwidth Limit:** Up to **200 GB** total bandwidth per day across all torrents.
 - ⏰ **Daily Reset:** Quotas reset automatically every day at `00:00 UTC`.
 
 ---
@@ -78,7 +78,7 @@ Applied automatically to maintain server stability and fair bandwidth distributi
 ### 🚀 Direct Live RAM Streaming (Zero Disk Footprint)
 - BitTorrent pieces are held in an in-memory sliding window and streamed straight to cloud storage HTTP sockets.
 - No temporary files are saved to the server's hard drive or SSD.
-- Supports files up to 40 GB with strict memory caps (~64 MB – 100 MB RAM).
+- Supports files up to 100 GB with strict memory caps (~64 MB – 128 MB RAM).
 
 ### 📄 Unified Rich Completion Bubble
 - Merges the batch `.txt` document, torrent transfer metadata, and expandable file list table into **one single message bubble**.

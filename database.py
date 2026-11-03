@@ -47,8 +47,8 @@ class DatabaseManager:
                 "results_channel": "",
                 "error_channel": "",
                 "daily_limit_regular": 5,
-                "max_size_gb_regular": 40.0,
-                "daily_bandwidth_gb_regular": 100.0,
+                "max_size_gb_regular": 100.0,
+                "daily_bandwidth_gb_regular": 200.0,
                 "buzzheavier_account_id": "",
                 "gofile_api_token": "",
                 "vikingfile_user_hash": "",
@@ -479,7 +479,7 @@ class DatabaseManager:
         return True, ""
 
     def check_user_can_request(self, user_id: int, admin_id: int) -> Tuple[bool, str]:
-        """Early quota check before resolving metadata: verifies 5 torrents limit and 100 GB daily limit."""
+        """Early quota check before resolving metadata: verifies 5 torrents limit and 200 GB daily limit."""
         if user_id == admin_id:
             return True, ""
 
@@ -504,7 +504,7 @@ class DatabaseManager:
                     f"Your daily quota resets tomorrow at 00:00 UTC."
                 )
 
-            daily_bw_gb = float(self.data["settings"].get("daily_bandwidth_gb_regular", 100.0))
+            daily_bw_gb = float(self.data["settings"].get("daily_bandwidth_gb_regular", 200.0))
             daily_bw_bytes = daily_bw_gb * (1024 ** 3)
             bytes_today = user.get("bytes_today", 0)
             if bytes_today >= daily_bw_bytes:
@@ -548,8 +548,8 @@ class DatabaseManager:
                     f"Your quota resets tomorrow at 00:00 UTC."
                 )
 
-            # 2. Single file size limit (40 GB max per single file)
-            max_file_size_gb = float(self.data["settings"].get("max_size_gb_regular", 40.0))
+            # 2. Single file size limit (100 GB max per single file)
+            max_file_size_gb = float(self.data["settings"].get("max_size_gb_regular", 100.0))
             max_file_size_bytes = max_file_size_gb * (1024 ** 3)
 
             if files:
@@ -571,8 +571,8 @@ class DatabaseManager:
                     f"The maximum allowed size for a single file is <b>{int(max_file_size_gb)} GB</b>."
                 )
 
-            # 3. Daily total bandwidth limit (100 GB across all 5 torrents)
-            daily_bw_gb = float(self.data["settings"].get("daily_bandwidth_gb_regular", 100.0))
+            # 3. Daily total bandwidth limit (200 GB across all 5 torrents)
+            daily_bw_gb = float(self.data["settings"].get("daily_bandwidth_gb_regular", 200.0))
             daily_bw_bytes = daily_bw_gb * (1024 ** 3)
             bytes_today = user.get("bytes_today", 0)
             requested_bytes = sum(f.get("length", 0) for f in files) if files else total_size_bytes
@@ -656,8 +656,8 @@ class DatabaseManager:
                 "bytes_today": bytes_today,
                 "bot_mode": self.data["settings"].get("bot_mode", "admin_only"),
                 "daily_limit": self.data["settings"].get("daily_limit_regular", 5),
-                "max_size_gb": self.data["settings"].get("max_size_gb_regular", 40.0),
-                "daily_bandwidth_gb": self.data["settings"].get("daily_bandwidth_gb_regular", 100.0),
+                "max_size_gb": self.data["settings"].get("max_size_gb_regular", 100.0),
+                "daily_bandwidth_gb": self.data["settings"].get("daily_bandwidth_gb_regular", 200.0),
                 "bot_channel": self.data["settings"].get("bot_channel", ""),
                 "channel_invite": self.data["settings"].get("channel_invite", ""),
                 "results_channel": self.data["settings"].get("results_channel", ""),
