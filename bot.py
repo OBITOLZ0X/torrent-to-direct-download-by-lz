@@ -927,7 +927,7 @@ def run_stream_pipeline(session_id: str, destination: str):
 
                 is_p = session.get("is_paused", False) or ev.get("isPaused", False)
                 header_title = f"{EMOJI_PAUSE} <b>TRANSFER PAUSED</b>" if is_p else f"{EMOJI_STREAM_UP} <b>TRANSFER IN PROGRESS</b>"
-                footer_line = "<i>⏸️ Transfer is paused. Tap Continue to resume.</i>" if is_p else "<i>⚡ Direct live transfer in progress...</i>"
+                footer_line = "<i>⏸️ Transfer is paused. Tap Continue to resume (within ~60s to prevent cloud timeout).</i>" if is_p else "<i>⚡ Direct live transfer in progress...</i>"
 
                 text = (
                     f"{header_title}\n"
@@ -2633,7 +2633,12 @@ def handle_callbacks(call: types.CallbackQuery):
 
     session = sessions.get(session_id)
     if not session:
-        bot.answer_callback_query(call.id, "Session expired. Please send torrent again.", show_alert=True)
+        bot.answer_callback_query(call.id, "Session expired or bot was restarted. Please send torrent again.", show_alert=True)
+        try:
+            if call.message:
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception:
+            pass
         return
 
     # Restrict session interactions if bot is currently in Admin Mode

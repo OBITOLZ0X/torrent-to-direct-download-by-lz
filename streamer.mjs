@@ -204,9 +204,21 @@ if (getMetadata) {
         const cmd = line.trim().toUpperCase();
         if (cmd === 'PAUSE') {
             isStreamPaused = true;
+            if (currentRawStream && typeof currentRawStream.pause === 'function') {
+                try { currentRawStream.pause(); } catch (e) {}
+            }
+            if (client && typeof client.throttleDownload === 'function') {
+                client.throttleDownload(0);
+            }
             console.log(JSON.stringify({ type: 'paused' }));
         } else if (cmd === 'RESUME') {
             isStreamPaused = false;
+            if (currentRawStream && typeof currentRawStream.resume === 'function') {
+                try { currentRawStream.resume(); } catch (e) {}
+            }
+            if (!isDownloadThrottled && client && typeof client.throttleDownload === 'function') {
+                client.throttleDownload(-1);
+            }
             console.log(JSON.stringify({ type: 'resumed' }));
         } else if (cmd === 'STOP') {
             if (client) {
@@ -219,8 +231,9 @@ if (getMetadata) {
 
     // Custom Sliding-Window Memory Chunk Store
     // Keeps pieces in RAM and safely reclaims pieces that have ALREADY passed the sequential read head,
-    // ensuring "Chunk not found" never occurs and RAM usage is strictly capped (~64MB-100MB).
+    // ensuring "Chunk not found" never occurs and RAM usage is strictly capped (~64MB-128MB).
     let activeStore = null;
+    let isDownloadThrottled = false;
 
     function SlidingMemoryStore(chunkLength, opts) {
         if (!(this instanceof SlidingMemoryStore)) return new SlidingMemoryStore(chunkLength, opts);
@@ -232,8 +245,22 @@ if (getMetadata) {
             this.lastChunkLength = (this.length % this.chunkLength) || this.chunkLength;
             this.lastChunkIndex = Math.ceil(this.length / this.chunkLength) - 1;
         }
+        this.totalMemoryBytes = 0;
+        this.startPiece = -1;
+        this.endPiece = -1;
         activeStore = this;
     }
+
+    SlidingMemoryStore.prototype.setPieceRange = function (start, end) {
+        this.startPiece = start;
+        this.endPiece = end;
+        for (const [idx, buf] of this.chunks.entries()) {
+            if (idx < start || idx > end) {
+                this.totalMemoryBytes = Math.max(0, this.totalMemoryBytes - buf.length);
+                this.chunks.delete(idx);
+            }
+        }
+    };
 
     SlidingMemoryStore.prototype.put = function (index, buf, cb = () => {}) {
         if (this.closed) return queueMicrotask(() => cb(new Error('Storage is closed')));
@@ -244,7 +271,29 @@ if (getMetadata) {
         if (!isLastChunk && buf.length !== this.chunkLength) {
             return queueMicrotask(() => cb(new Error('Chunk length must be ' + this.chunkLength)));
         }
+
+        // Drop pieces outside the selected file in multi-file torrents (e.g. DODI / FitGirl repacks)
+        if (this.startPiece >= 0 && (index < this.startPiece || index > this.endPiece)) {
+            return queueMicrotask(() => cb(null));
+        }
+
+        if (!this.chunks.has(index)) {
+            this.totalMemoryBytes += buf.length;
+        } else {
+            const oldBuf = this.chunks.get(index);
+            this.totalMemoryBytes += (buf.length - oldBuf.length);
+        }
         this.chunks.set(index, buf);
+
+        // Adaptive RAM throttle: If RAM exceeds 128MB or chunks exceed 16, throttle WebTorrent download to 0
+        const MAX_STORE_BYTES = 128 * 1024 * 1024;
+        if ((this.totalMemoryBytes >= MAX_STORE_BYTES || this.chunks.size >= 16) && !isDownloadThrottled) {
+            isDownloadThrottled = true;
+            if (client && typeof client.throttleDownload === 'function') {
+                client.throttleDownload(0);
+            }
+        }
+
         queueMicrotask(() => cb(null));
     };
 
@@ -272,9 +321,19 @@ if (getMetadata) {
 
     SlidingMemoryStore.prototype.cleanPastPieces = function (safePieceIndex) {
         if (this.closed || !this.chunks) return;
-        for (const idx of this.chunks.keys()) {
+        for (const [idx, buf] of this.chunks.entries()) {
             if (idx < safePieceIndex) {
+                this.totalMemoryBytes = Math.max(0, this.totalMemoryBytes - buf.length);
                 this.chunks.delete(idx);
+            }
+        }
+
+        // Drain threshold: If memory falls below 48MB and chunks < 8, resume WebTorrent swarm download
+        const RESUME_STORE_BYTES = 48 * 1024 * 1024;
+        if (this.totalMemoryBytes < RESUME_STORE_BYTES && this.chunks.size < 8 && isDownloadThrottled && !isStreamPaused) {
+            isDownloadThrottled = false;
+            if (client && typeof client.throttleDownload === 'function') {
+                client.throttleDownload(-1);
             }
         }
     };
@@ -282,6 +341,7 @@ if (getMetadata) {
     SlidingMemoryStore.prototype.close = SlidingMemoryStore.prototype.destroy = function (cb = () => {}) {
         if (this.closed) return queueMicrotask(() => cb(new Error('Storage is closed')));
         this.closed = true;
+        this.totalMemoryBytes = 0;
         if (this.chunks) this.chunks.clear();
         queueMicrotask(() => cb(null));
     };
@@ -396,7 +456,8 @@ if (getMetadata) {
     client.add(torrentInput, {
         store: SlidingMemoryStore,
         announce: extraTrackers,
-        strategy: 'sequential'
+        strategy: 'sequential',
+        deselect: true
     }, async (torrent) => {
         currentTorrent = torrent;
 
@@ -414,6 +475,11 @@ if (getMetadata) {
             torrent.deselect(0, torrent.pieces.length - 1, false);
         }
         const file = torrent.files[fileIndex];
+        const startP = typeof file._startPiece === 'number' ? file._startPiece : 0;
+        const endP = typeof file._endPiece === 'number' ? file._endPiece : (torrent.pieces.length - 1);
+        if (activeStore && typeof activeStore.setPieceRange === 'function') {
+            activeStore.setPieceRange(startP, endP);
+        }
         file.select();
         if (typeof torrent.critical === 'function' && typeof file._startPiece === 'number') {
             const endCrit = Math.min(file._endPiece, file._startPiece + 1);
@@ -442,9 +508,9 @@ if (getMetadata) {
                 if (now - lastReport >= 1500 || bytesSentToNetwork >= totalSize) {
                     lastReport = now;
                     const elapsed = Math.max(0.001, (now - startTime) / 1000);
-                    const speed = bytesSentToNetwork / elapsed;
+                    const speed = isStreamPaused ? 0 : (bytesSentToNetwork / elapsed);
                     const remaining = Math.max(0, totalSize - bytesSentToNetwork);
-                    const eta = speed > 0 ? remaining / speed : 0;
+                    const eta = (!isStreamPaused && speed > 0) ? (remaining / speed) : 0;
 
                     console.log(JSON.stringify({
                         type: 'progress',
@@ -454,7 +520,7 @@ if (getMetadata) {
                         speed: speed,
                         eta: eta,
                         peers: torrent.numPeers,
-                        isPaused: false
+                        isPaused: isStreamPaused
                     }));
                 }
                 this.push(chunk);
@@ -788,9 +854,11 @@ if (getMetadata) {
                     }
 
                     if (activePart.getError()) {
-                        // S3 closed idle connection while transfer was paused: re-open activePart cleanly
-                        activePart = createPartPut(urls[currentPartIdx], getPartLength(currentPartIdx));
-                        bytesInCurrentPart = 0;
+                        if (bytesInCurrentPart === 0) {
+                            activePart = createPartPut(urls[currentPartIdx], getPartLength(currentPartIdx));
+                        } else {
+                            throw new Error(`Upload connection lost during transfer (${activePart.getError().message}).`);
+                        }
                     }
 
                     bytesReadFromTorrent += chunk.length;
