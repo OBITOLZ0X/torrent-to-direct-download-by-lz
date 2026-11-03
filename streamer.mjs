@@ -87,16 +87,26 @@ const extraTrackers = [
     'udp://tracker.torrent.eu.org:451/announce',
     'udp://tracker.bittor.pw:1337/announce',
     'udp://tracker.dler.org:6969/announce',
-    'udp://exodus.desync.com:6969/announce',
-    'udp://open.demonii.com:1337/announce',
-    'http://tracker.openbittorrent.com:80/announce',
-    'udp://tracker.moeking.me:6969/announce',
-    'udp://explodie.org:6969/announce',
     'udp://opentracker.i2p.rocks:6969/announce',
     'udp://open.tracker.cl:1337/announce',
-    'udp://tracker.cyberia.is:6969/announce',
     'udp://tracker.qu.ax:6969/announce',
     'udp://opentor.net:6969/announce',
+    'udp://tracker.moeking.me:6969/announce',
+    'udp://explodie.org:6969/announce',
+    'udp://tracker.filemail.com:6969/announce',
+    'udp://tracker.altrosky.nl:6969/announce',
+    'udp://tracker.t-rb.org:6969/announce',
+    'http://tracker.renovite.com.br:6969/announce',
+    'udp://tracker.armun.org:6969/announce',
+    'udp://tracker.loadbt.com:6969/announce',
+    'udp://tracker.auctor.tv:6969/announce',
+    'udp://tracker.publictracker.xyz:6969/announce',
+    'udp://tracker.0x7c0.com:6969/announce',
+    'udp://tracker.corpscorp.online:80/announce',
+    'udp://tracker.tryhackx.org:6969/announce',
+    'udp://open.demonii.com:1337/announce',
+    'http://tracker.openbittorrent.com:80/announce',
+    'udp://exodus.desync.com:6969/announce',
 ];
 
 // Prepare torrent input
@@ -348,7 +358,7 @@ if (getMetadata) {
 
     const client = new WebTorrent({
         dht: true,
-        maxConns: 85,
+        maxConns: 150,
     });
 
     console.log(JSON.stringify({ type: 'status', message: 'Connecting to swarm and caching in RAM...' }));
@@ -530,7 +540,7 @@ if (getMetadata) {
 
         const uploadStream = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
 
-        function pipeRawStreamIntoUpload(rawStream, firstChunk) {
+        function pipeRawStreamIntoUpload(rawStream, prebufferChunks) {
             currentRawStream = rawStream;
 
             rawStream.on('error', (err) => {
@@ -539,9 +549,14 @@ if (getMetadata) {
                 process.exit(1);
             });
 
-            if (firstChunk) {
-                bytesReadFromTorrent += firstChunk.length;
-                uploadStream.write(firstChunk);
+            if (Array.isArray(prebufferChunks)) {
+                for (const chunk of prebufferChunks) {
+                    bytesReadFromTorrent += chunk.length;
+                    uploadStream.write(chunk);
+                }
+            } else if (prebufferChunks) {
+                bytesReadFromTorrent += prebufferChunks.length;
+                uploadStream.write(prebufferChunks);
             }
 
             rawStream.on('data', (chunk) => {
@@ -575,7 +590,7 @@ if (getMetadata) {
         // ─────────────────────────────────────────────
         // Route 1: Gofile.io Upload
         // ─────────────────────────────────────────────
-        async function startGofileUpload(firstChunk, rawStream) {
+        async function startGofileUpload(prebufferChunks, rawStream) {
             const servers = await getGofileServers();
             const serverName = (servers && servers.length > 0)
                 ? servers[Math.floor(Math.random() * servers.length)]
@@ -655,13 +670,13 @@ if (getMetadata) {
 
             form.pipe(req);
             startTime = Date.now();
-            pipeRawStreamIntoUpload(rawStream, firstChunk);
+            pipeRawStreamIntoUpload(rawStream, prebufferChunks);
         }
 
         // ─────────────────────────────────────────────
         // Route 2: Buzzheavier.com Upload (Default)
         // ─────────────────────────────────────────────
-        async function startBuzzheavierUpload(firstChunk, rawStream) {
+        async function startBuzzheavierUpload(prebufferChunks, rawStream) {
             const encodedName = encodeURIComponent(file.name);
             const headers = {
                 'Content-Length': totalSize,
@@ -729,13 +744,13 @@ if (getMetadata) {
 
             uploadStream.pipe(networkCounter).pipe(req);
             startTime = Date.now();
-            pipeRawStreamIntoUpload(rawStream, firstChunk);
+            pipeRawStreamIntoUpload(rawStream, prebufferChunks);
         }
 
         // ─────────────────────────────────────────────
         // Route 3: VikingFile.com Upload (Resumable S3 Multipart)
         // ─────────────────────────────────────────────
-        async function startVikingfileUpload(firstChunk, rawStream) {
+        async function startVikingfileUpload(prebufferChunks, rawStream) {
             currentRawStream = rawStream;
             let uploadInfo;
             try {
@@ -841,7 +856,11 @@ if (getMetadata) {
             }, 1500);
 
             async function* getChunks() {
-                if (firstChunk) yield firstChunk;
+                if (Array.isArray(prebufferChunks)) {
+                    for (const chunk of prebufferChunks) yield chunk;
+                } else if (prebufferChunks) {
+                    yield prebufferChunks;
+                }
                 for await (const chunk of rawStream) {
                     yield chunk;
                 }
@@ -927,40 +946,32 @@ if (getMetadata) {
         }
 
         // ─────────────────────────────────────────────
-        // Buffer Initial Piece Before Opening HTTP Sockets
+        // ─────────────────────────────────────────────
+        // Buffer Initial Pieces in RAM Before Opening Cloud Socket
         // ─────────────────────────────────────────────
         const rawStream = file.createReadStream();
         currentRawStream = rawStream;
 
-        let firstChunkReceived = false;
+        let uploadStarted = false;
+        const prebufferChunks = [];
+        let prebufferBytes = 0;
+
+        // Dynamic pre-buffer: 2 full pieces or at least 8MB (capped at file totalSize and at most 16MB)
+        const pieceLen = torrent.pieceLength || (4 * 1024 * 1024);
+        const targetPrebufferBytes = Math.min(totalSize, Math.max(pieceLen * 2, 8 * 1024 * 1024));
+
         const bufferingInterval = setInterval(() => {
-            if (firstChunkReceived) {
+            if (uploadStarted) {
                 clearInterval(bufferingInterval);
                 return;
             }
-            let pLen = torrent.pieceLength || (4 * 1024 * 1024);
-            let buffered = 0;
-            try {
-                if (file && typeof file._startPiece === 'number') {
-                    const startIdx = file._startPiece;
-                    if (torrent.pieces && startIdx === torrent.pieces.length - 1 && torrent.lastPieceLength) {
-                        pLen = torrent.lastPieceLength;
-                    }
-                    if (torrent.bitfield && torrent.bitfield.get(startIdx)) {
-                        buffered = pLen;
-                    } else if (torrent.pieces && torrent.pieces[startIdx]) {
-                        buffered = Math.max(0, pLen - (torrent.pieces[startIdx].missing || 0));
-                    }
-                }
-            } catch (_) {}
-
             console.log(JSON.stringify({
                 type: 'progress',
                 phase: 'buffering',
                 transferred: 0,
                 total: totalSize,
-                bufferedBytes: buffered,
-                pieceLength: pLen,
+                bufferedBytes: Math.min(prebufferBytes, targetPrebufferBytes),
+                pieceLength: targetPrebufferBytes,
                 speed: torrent.downloadSpeed,
                 eta: 0,
                 peers: torrent.numPeers,
@@ -968,17 +979,29 @@ if (getMetadata) {
             }));
         }, 1500);
 
-        rawStream.once('data', async (firstChunk) => {
-            firstChunkReceived = true;
+        async function triggerUpload() {
+            if (uploadStarted) return;
+            uploadStarted = true;
             clearInterval(bufferingInterval);
             rawStream.pause();
 
             if (destination === 'gofile') {
-                await startGofileUpload(firstChunk, rawStream);
+                await startGofileUpload(prebufferChunks, rawStream);
             } else if (destination === 'vikingfile') {
-                await startVikingfileUpload(firstChunk, rawStream);
+                await startVikingfileUpload(prebufferChunks, rawStream);
             } else {
-                await startBuzzheavierUpload(firstChunk, rawStream);
+                await startBuzzheavierUpload(prebufferChunks, rawStream);
+            }
+        }
+
+        rawStream.on('data', async (chunk) => {
+            if (!uploadStarted) {
+                prebufferChunks.push(chunk);
+                prebufferBytes += chunk.length;
+                if (prebufferBytes >= targetPrebufferBytes || prebufferBytes >= totalSize) {
+                    rawStream.pause();
+                    await triggerUpload();
+                }
             }
         });
     });
