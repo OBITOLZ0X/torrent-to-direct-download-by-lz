@@ -774,66 +774,65 @@ if (getMetadata) {
                     : partSize;
             }
 
-            function createPartPut(url, pLen) {
-                let partError = null;
-                const u = new URL(url);
-                const pass = new PassThrough({ highWaterMark: 16 * 1024 * 1024 });
-                const promise = new Promise((resolve, reject) => {
-                    const req = https.request({
-                        protocol: u.protocol,
-                        hostname: u.hostname,
-                        path: u.pathname + u.search,
-                        method: 'PUT',
-                        headers: {
-                            'Content-Length': pLen,
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                            'Accept': '*/*',
-                            'Connection': 'keep-alive'
+            function uploadPartWithRetry(url, buffer, retries = 3) {
+                return new Promise(async (resolve, reject) => {
+                    for (let att = 1; att <= retries; att++) {
+                        try {
+                            const etag = await new Promise((resEtag, rejEtag) => {
+                                const u = new URL(url);
+                                const req = https.request({
+                                    protocol: u.protocol,
+                                    hostname: u.hostname,
+                                    path: u.pathname + u.search,
+                                    method: 'PUT',
+                                    headers: {
+                                        'Content-Length': buffer.length,
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                        'Accept': '*/*',
+                                        'Connection': 'keep-alive'
+                                    }
+                                }, (res) => {
+                                    let body = '';
+                                    res.on('data', d => body += d);
+                                    res.on('end', () => {
+                                        if (res.statusCode === 200 || res.statusCode === 201) {
+                                            const rawEtag = res.headers['etag'] || '';
+                                            resEtag(rawEtag.replace(/"/g, ''));
+                                        } else {
+                                            rejEtag(new Error(`VikingFile PUT part failed HTTP ${res.statusCode}: ${body}`));
+                                        }
+                                    });
+                                });
+
+                                req.on('socket', (socket) => {
+                                    socket.setKeepAlive(true, 15000);
+                                    socket.setTimeout(60000);
+                                });
+
+                                req.on('error', (err) => {
+                                    const isConnClosed = err.message?.includes('socket hang up') ||
+                                                         err.code === 'ECONNRESET' ||
+                                                         err.code === 'ETIMEDOUT' ||
+                                                         err.message?.includes('timed out');
+                                    rejEtag(new Error(isConnClosed ? `VikingFile upload connection lost: ${err.message}` : err.message));
+                                });
+
+                                req.write(buffer);
+                                req.end();
+                            });
+                            return resolve(etag);
+                        } catch (err) {
+                            if (att >= retries) return reject(err);
+                            await new Promise(r => setTimeout(r, 2000));
                         }
-                    }, (res) => {
-                        let body = '';
-                        res.on('data', d => body += d);
-                        res.on('end', () => {
-                            if (res.statusCode === 200 || res.statusCode === 201) {
-                                const rawEtag = res.headers['etag'] || '';
-                                const etag = rawEtag.replace(/"/g, '');
-                                resolve(etag);
-                            } else {
-                                const e = new Error(`VikingFile PUT part failed HTTP ${res.statusCode}: ${body}`);
-                                partError = e;
-                                reject(e);
-                            }
-                        });
-                    });
-
-                    req.on('socket', (socket) => {
-                        socket.setKeepAlive(true, 15000);
-                        socket.setTimeout(0);
-                    });
-
-                    req.on('error', (err) => {
-                        const isConnClosed = err.message?.includes('socket hang up') ||
-                                             err.code === 'ECONNRESET' ||
-                                             err.code === 'ETIMEDOUT' ||
-                                             err.message?.includes('timed out');
-                        const e = new Error(isConnClosed ? `VikingFile upload connection lost: ${err.message}` : err.message);
-                        partError = e;
-                        reject(e);
-                    });
-
-                    pass.pipe(req);
+                    }
                 });
-
-                // Attach no-op catch to prevent unhandled rejection crashes while in-flight
-                promise.catch(() => {});
-
-                return { pass, promise, getError: () => partError };
             }
 
             const etags = [];
             let currentPartIdx = 0;
             let bytesInCurrentPart = 0;
-            let activePart = createPartPut(urls[0], getPartLength(0));
+            let currentPartBuffers = [];
 
             startTime = Date.now();
             const progressInterval = setInterval(() => {
@@ -872,14 +871,6 @@ if (getMetadata) {
                         await new Promise(r => setTimeout(r, 200));
                     }
 
-                    if (activePart.getError()) {
-                        if (bytesInCurrentPart === 0) {
-                            activePart = createPartPut(urls[currentPartIdx], getPartLength(currentPartIdx));
-                        } else {
-                            throw new Error(`Upload connection lost during transfer (${activePart.getError().message}).`);
-                        }
-                    }
-
                     bytesReadFromTorrent += chunk.length;
                     const pieceLen = torrent.pieceLength || (2 * 1024 * 1024);
                     const currentTorrentPiece = Math.floor((file.offset + bytesReadFromTorrent) / pieceLen);
@@ -896,24 +887,19 @@ if (getMetadata) {
                         const toWrite = Math.min(remainingForPart, availableFromChunk);
 
                         const slice = chunk.subarray(chunkOffset, chunkOffset + toWrite);
-                        const canWrite = activePart.pass.write(slice);
-                        if (!canWrite) {
-                            await new Promise(resolve => activePart.pass.once('drain', resolve));
-                        }
+                        currentPartBuffers.push(slice);
                         bytesInCurrentPart += toWrite;
                         bytesSentToNetwork += toWrite;
                         chunkOffset += toWrite;
 
                         if (bytesInCurrentPart === expectedLen) {
-                            activePart.pass.end();
-                            const etag = await activePart.promise;
+                            const partBuf = Buffer.concat(currentPartBuffers, expectedLen);
+                            currentPartBuffers = [];
+                            const etag = await uploadPartWithRetry(urls[currentPartIdx], partBuf);
                             etags.push({ PartNumber: currentPartIdx + 1, ETag: etag });
 
                             currentPartIdx++;
-                            if (currentPartIdx < numberParts) {
-                                activePart = createPartPut(urls[currentPartIdx], getPartLength(currentPartIdx));
-                                bytesInCurrentPart = 0;
-                            }
+                            bytesInCurrentPart = 0;
                         }
                     }
                 }

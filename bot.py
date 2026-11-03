@@ -1056,6 +1056,10 @@ def run_stream_pipeline(session_id: str, destination: str):
                 except Exception:
                     pass
 
+                hint = ""
+                if "socket hang up" in error_msg.lower() or "connection lost" in error_msg.lower():
+                    hint = f"{SEP}\n💡 <b>Tip:</b> <i>Torrent swarm download speed is stalled or too slow (&lt;100 KB/s), causing cloud server socket timeout. Choose a torrent with active seeders, or switch host to VikingFile!</i>\n"
+
                 safe_edit_message(
                     chat_id,
                     message_id,
@@ -1063,6 +1067,7 @@ def run_stream_pipeline(session_id: str, destination: str):
                     f"{SEP}\n"
                     f"<blockquote>📄 <b>File:</b> <code>{html.escape(fname)}</code>\n"
                     f"⚠️ <b>Reason:</b> <code>{html.escape(error_msg)}</code></blockquote>\n"
+                    f"{hint}"
                     f"{SEP}\n"
                     f"<i>If the problem persists, please contact the bot owner.</i>",
                     reply_markup=None,
